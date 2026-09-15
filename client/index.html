@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Mobile-first: no user-scalable=no, pinch-zoom must keep working on maps. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#12141f" />
+    <meta
+      name="description"
+      content="Tour Mate — browse guided tours, check live seat availability and build your own scenic route."
+    />
+    <!-- OpenFreeMap serves both the style JSON and the vector tiles, so the TLS
+         handshake is warm by the time MapLibre asks for them. -->
+    <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin />
+    <title>Tour Mate</title>
+  </head>
+  <body class="bg-sand-50 text-ink-800 antialiased">
+    <div id="root"></div>
+    
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

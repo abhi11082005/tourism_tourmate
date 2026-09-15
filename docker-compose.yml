@@ -1,0 +1,58 @@
+version: '3.9'
+
+# Everything Tour Mate needs to run locally, all open source and free.
+#
+#   docker compose up -d db cache
+#   docker compose --profile routing up -d      # OSRM, after the prepare step below
+#
+# OSRM needs a one-off preprocessing pass over an OSM extract. For Jaipur:
+#
+#   mkdir -p osrm && cd osrm
+#   curl -O https://download.geofabrik.de/asia/india/northern-zone-latest.osm.pbf
+#   docker run -t -v "$PWD:/data" ghcr.io/project-osrm/osrm-backend \
+#     osrm-extract -p /opt/foot.lua /data/northern-zone-latest.osm.pbf
+#   docker run -t -v "$PWD:/data" ghcr.io/project-osrm/osrm-backend \
+#     osrm-partition /data/northern-zone-latest.osrm
+#   docker run -t -v "$PWD:/data" ghcr.io/project-osrm/osrm-backend \
+#     osrm-customize /data/northern-zone-latest.osrm
+#
+# Swap -p /opt/foot.lua for car.lua or bicycle.lua to serve a different profile.
+
+services:
+  db:
+    # pgvector's image is Postgres + pgvector; postgis is added by the init SQL
+    # in the migrations (CREATE EXTENSION), so use an image that ships both.
+    build: .
+    environment:
+      POSTGRES_USER: tourmate
+      POSTGRES_PASSWORD: tourmate
+      POSTGRES_DB: tourmate
+    ports: ['5433:5432'] 
+    volumes:
+      - tourmate-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U tourmate']
+      interval: 5s
+      retries: 10
+
+  cache:
+    image: redis:7-alpine
+    # Seat holds are recoverable state (a lost hold just frees seats early), so
+    # persistence is off deliberately — it keeps the lock path fast.
+    command: redis-server --save '' --appendonly no --maxmemory-policy noeviction
+    ports: ['6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  osrm:
+    profiles: ['routing']
+    image: ghcr.io/project-osrm/osrm-backend
+    command: osrm-routed --algorithm mld /data/northern-zone-latest.osrm
+    volumes:
+      - ./osrm:/data
+    ports: ['5000:5000']
+
+volumes:
+  tourmate-db:

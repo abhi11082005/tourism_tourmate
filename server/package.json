@@ -1,0 +1,42 @@
+{
+  "name": "tour-mate-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "check": "node scripts/checkSyntax.mjs",
+    "migrate": "node scripts/migrate.js",
+    "migrate:dry": "node scripts/migrate.js --dry-run",
+    "seed": "node scripts/migrate.js --include-seed",
+    "rag:index": "node scripts/buildEmbeddings.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@clerk/clerk-sdk-node": "^4.13.23",
+    "bcrypt": "5.1.1",
+    "compression": "1.7.4",
+    "cookie-parser": "^1.4.7",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "express": "4.19.2",
+    "express-rate-limit": "7.4.0",
+    "helmet": "7.1.0",
+    "ioredis": "5.4.1",
+    "jsonwebtoken": "9.0.2",
+    "pdfkit": "^0.15.2",
+    "pg": "8.12.0",
+    "pino": "9.3.2",
+    "pino-http": "10.2.0",
+    "razorpay": "^2.9.8",
+    "svix": "^2.3.0",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "pino-pretty": "11.2.2"
+  }
+}

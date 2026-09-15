@@ -1,0 +1,82 @@
+/* MapLibre GL's own stylesheet, first so the @import stays valid CSS. Bundled here
+   rather than fetched with a runtime <link>, which would block the map paint. */
+@import 'maplibre-gl/dist/maplibre-gl.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Both schemes are declared so form controls, scrollbars and the MapLibre
+     attribution box follow the theme without extra CSS. */
+  :root {
+    color-scheme: light;
+  }
+ body {
+    @apply bg-sand-50 text-ink-900 transition-colors duration-200;
+  }
+  
+  /* Dark mode overrides */
+  .dark body {
+    @apply bg-ink-900 text-white;
+  }
+
+  /* Respect the OS setting: the pin glow and route draw animations stop. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  :focus-visible {
+    outline: 2px solid theme('colors.glow');
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm
+           font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-ink-800 text-sand-50 hover:bg-ink-900
+           dark:bg-sand-300 dark:text-ink-900 dark:hover:bg-sand-100;
+  }
+  .btn-ghost {
+    @apply btn border border-sand-300 bg-white text-ink-800 hover:bg-sand-100
+           dark:border-ink-600 dark:bg-ink-800 dark:text-sand-50 dark:hover:bg-ink-700;
+  }
+  .card {
+    @apply rounded-2xl border border-sand-100 bg-white shadow-sm
+           dark:border-ink-600 dark:bg-ink-900 dark:shadow-none;
+  }
+  .field {
+    @apply min-h-11 w-full rounded-xl border border-sand-300 bg-white px-3 text-sm
+           outline-none focus:border-ink-700
+           dark:border-ink-600 dark:bg-ink-800 dark:text-sand-50 dark:focus:border-sand-300;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full border border-sand-300 px-3 py-1 text-xs font-medium
+           dark:border-ink-600;
+  }
+  /* Muted body copy. `text-ink-700` is unreadable on a dark card, and it was
+     scattered across a dozen files — one class fixes all of them at once. */
+  .muted {
+    @apply text-ink-700 dark:text-sand-300;
+  }
+  .faint {
+    @apply text-sand-500 dark:text-sand-300/70;
+  }
+  /* Status banners, both themes. */
+  .notice-error {
+    @apply rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-200;
+  }
+  .notice-ok {
+    @apply rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200;
+  }
+}
