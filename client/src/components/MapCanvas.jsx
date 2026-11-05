@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Map as MapLibreMap, Marker, NavigationControl, Popup } from 'maplibre-gl';
+import { LngLatBounds, Map as MapLibreMap, Marker, NavigationControl, Popup } from 'maplibre-gl';
 import { useTheme } from '../context/ThemeContext.jsx';
 
 /*
@@ -111,6 +111,22 @@ const LAYERS = [
 
 const EMPTY = { type: 'FeatureCollection', features: [] };
 
+/*
+ * Numbered itinerary markers. The selected one is larger, accent-coloured and
+ * stacked above its neighbours. Full class strings on purpose: Tailwind only
+ * generates classes it can find as literals in the source.
+ */
+const MARKER_BASE =
+  'grid h-7 w-7 cursor-pointer place-items-center rounded-full bg-ink-800 text-xs font-bold text-white shadow-lg ring-2 ring-white transition-all duration-200';
+const MARKER_SELECTED =
+  'grid h-10 w-10 cursor-pointer place-items-center rounded-full bg-glow text-sm font-bold text-white shadow-xl ring-4 ring-white transition-all duration-200';
+
+const applyMarkerStyle = (el, selected) => {
+  el.className = selected ? MARKER_SELECTED : MARKER_BASE;
+  el.style.zIndex = selected ? '2' : '1';
+  el.setAttribute('aria-pressed', selected ? 'true' : 'false');
+};
+
 const coords = (item) => {
   const lng = Number(item?.lng);
   const lat = Number(item?.lat);
@@ -153,12 +169,19 @@ function MapCanvas({
   initialView = { latitude: 26.9124, longitude: 75.7873, zoom: 12 },
   onMoveEnd,
   onPinSelect,
+  // Optional, additive: index into `stops` of the highlighted numbered marker, a
+  // click callback for those markers, and whether to frame all stops on mount.
+  selectedStop = null,
+  onStopSelect,
+  fitToStops = false,
   className = 'h-[60vh] w-full',
 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const popupRef = useRef(null);
   const originRef = useRef(null);
+  const markersRef = useRef([]);
+  const fittedRef = useRef('');
   const [failure, setFailure] = useState(null);
 
   const { isDark } = useTheme();
@@ -176,7 +199,15 @@ function MapCanvas({
    */
   const latest = useRef({});
   useEffect(() => {
-    latest.current = { pinCollection, routeFeature, onMoveEnd, onPinSelect };
+    latest.current = {
+      pinCollection,
+      routeFeature,
+      onMoveEnd,
+      onPinSelect,
+      onStopSelect,
+      selectedStop,
+      stopItems,
+    };
   });
 
   useEffect(() => {
@@ -383,26 +414,71 @@ function MapCanvas({
    * `[]` and arrives from an inline expression, so its identity changes on every
    * render and the markers would be destroyed and rebuilt each time.
    */
-  const stopPositions = useMemo(
-    () => stops.map(coords).filter(Boolean),
+  const stopsKey = stops.map((s) => `${s?.lng},${s?.lat},${s?.name ?? ''}`).join('|');
+  const stopItems = useMemo(
+    () =>
+      stops
+        .map((s) => ({ position: coords(s), name: s?.name ?? '' }))
+        .filter((item) => item.position),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stops.map((s) => `${s?.lng},${s?.lat}`).join('|')]
+    [stopsKey]
   );
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return undefined;
 
-    const markers = stopPositions.map((position, i) => {
-      const el = document.createElement('span');
-      el.className =
-        'grid h-7 w-7 place-items-center rounded-full bg-ink-800 text-xs font-bold text-white shadow-lg';
+    const markers = stopItems.map((item, i) => {
+      const el = document.createElement('button');
+      el.type = 'button';
       el.textContent = String(i + 1);
-      return new Marker({ element: el }).setLngLat(position).addTo(map);
+      el.setAttribute('aria-label', `Stop ${i + 1}${item.name ? `: ${item.name}` : ''}`);
+      applyMarkerStyle(el, latest.current.selectedStop === i);
+      el.addEventListener('click', (event) => {
+        // Handled here: don't let it fall through to the map's pin-popup click.
+        event.stopPropagation();
+        latest.current.onStopSelect?.(i);
+      });
+      return new Marker({ element: el }).setLngLat(item.position).addTo(map);
     });
+    markersRef.current = markers;
 
-    return () => markers.forEach((m) => m.remove());
-  }, [stopPositions]);
+    // Frame every stop once per distinct set of stops.
+    if (fitToStops && stopItems.length > 1 && fittedRef.current !== stopsKey) {
+      fittedRef.current = stopsKey;
+      const bounds = new LngLatBounds();
+      stopItems.forEach((item) => bounds.extend(item.position));
+      map.fitBounds(bounds, {
+        padding: { top: 70, bottom: 70, left: 50, right: 50 },
+        maxZoom: 14,
+        duration: 0,
+      });
+    }
+
+    return () => {
+      markers.forEach((m) => m.remove());
+      markersRef.current = [];
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopItems]);
+
+  // Highlight the selected marker and bring it into view.
+  useEffect(() => {
+    markersRef.current.forEach((marker, i) =>
+      applyMarkerStyle(marker.getElement(), i === selectedStop)
+    );
+    const map = mapRef.current;
+    const item = selectedStop == null ? null : latest.current.stopItems?.[selectedStop];
+    if (!map || !item) return;
+    const reduce =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    map.easeTo({
+      center: item.position,
+      zoom: Math.max(map.getZoom(), 13.5),
+      duration: reduce ? 0 : 600,
+    });
+  }, [selectedStop]);
 
   return (
     <div className={`${className} relative overflow-hidden rounded-2xl bg-sand-100 dark:bg-ink-900`}>

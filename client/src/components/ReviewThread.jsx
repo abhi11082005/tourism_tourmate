@@ -24,6 +24,25 @@ function Stars({ value }) {
   );
 }
 
+// Initials avatar — reviews carry a name but no picture, and we don't invent one.
+function Avatar({ name }) {
+  const initials =
+    String(name ?? '')
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((word) => word[0]?.toUpperCase() ?? '')
+      .join('') || '?';
+  return (
+    <span
+      aria-hidden
+      className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-sand-100 text-sm font-bold text-sand-700 dark:bg-ink-800 dark:text-sand-300"
+    >
+      {initials}
+    </span>
+  );
+}
+
 function CommentComposer({ reviewId, parentId, onDone }) {
   const [text, setText] = useState('');
   const qc = useQueryClient();
@@ -169,11 +188,14 @@ export default function ReviewThread({ tourId }) {
   return (
     <div className="space-y-4">
       {data.items.map((r) => (
-        <article key={r.id} className="card p-4">
+        <article key={r.id} className="card p-5">
           <header className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold">{r.author_name}</p>
-              <Stars value={r.rating} />
+            <div className="flex items-center gap-3">
+              <Avatar name={r.author_name} />
+              <div>
+                <p className="text-sm font-semibold">{r.author_name}</p>
+                <Stars value={r.rating} />
+              </div>
             </div>
             <button
               type="button"
