@@ -141,7 +141,7 @@ export async function toggleCommentLike({ commentId, userId }) {
       [commentId]
     );
   }
-  return { liked: false };
+  return { liked: false }; 
 }
 
 /** Wishlist ("Save for later"). */

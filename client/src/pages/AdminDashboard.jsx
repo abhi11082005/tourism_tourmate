@@ -7,6 +7,7 @@ import TourBuilder from '../components/TourBuilder.jsx';
 import GuideAssignmentTable from '../components/GuideAssignmentTable.jsx';
 import CouponManager from '../components/CouponManager.jsx';
 import CampaignManager from '../components/CampaignManager.jsx';
+import AdminChangableCard from '../components/AdminChangableCard.jsx';
 
 // MapLibre GL is ~900kB. Same call as the tour detail page: load the pin manager on
 // demand so it never weighs down the admin console's first paint.
@@ -31,19 +32,21 @@ const MapPinManager = lazy(() => import('../components/MapPinManager.jsx'));
  *      engine that surface on the storefront.
  */
 
+
 export default function AdminDashboard() {
   const analytics = useQuery({
     queryKey: ['analytics'],
     queryFn: ({ signal }) => api.analytics(signal),
     staleTime: 60_000,
   });
+  
 
-  const tours = useQuery({
+const tours = useQuery({
     queryKey: ['admin-tours'],
-    queryFn: ({ signal }) => api.listTours({ limit: 50, sort: 'newest' }, signal),
+    // Change api.listTours to api.listToursAdmin
+    queryFn: ({ signal }) => api.listToursAdmin(signal), 
     staleTime: 60_000,
   });
-
   const totals = analytics.data?.totals;
 
   return (
@@ -403,62 +406,125 @@ function SupportInbox() {
  * TourBuilder owns all the form/seat logic and its own dark-mode, mobile-first
  * layout; this wrapper only decides which tour it's pointed at.
  */
+/*
+ * Package workbench — the single create/edit entry point for tours.
+ * Now uses a grid view of AdminChangableCards. Clicking "Edit" or "New"
+ * swaps the grid out for the TourBuilder form.
+ */
+/*
+ * Package workbench — the single create/edit entry point for tours.
+ * Now uses a grid view of AdminChangableCards. Clicking "Edit" or "New"
+ * swaps the grid out for the TourBuilder form.
+ */
 function TourWorkbench({ tours }) {
   const qc = useQueryClient();
-  const [slug, setSlug] = useState(''); // '' → build a new package
+  
+  // State to track what we are looking at:
+  // 'LIST' = show the grid of cards
+  // 'NEW'  = show blank TourBuilder
+  // 'slug-name' = fetch and show existing TourBuilder
+  const [view, setView] = useState('LIST');
+
+  // Only fetch data if we are editing an existing tour
+  const fetchSlug = (view !== 'LIST' && view !== 'NEW') ? view : '';
 
   const editing = useQuery({
-    queryKey: ['tour', slug],
-    queryFn: ({ signal }) => api.getTour(slug, signal),
-    enabled: Boolean(slug),
+    queryKey: ['tour', fetchSlug],
+    queryFn: ({ signal }) => api.getTour(fetchSlug, signal),
+    enabled: Boolean(fetchSlug),
     staleTime: 60_000,
+  });
+
+  const deleteTour = useMutation({
+    mutationFn: (tourId) => api.deleteTourAdmin(tourId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-tours'] });
+      qc.invalidateQueries({ queryKey: ['tours'] });
+      setView('LIST'); // Go back to list if we were somehow editing
+    },
   });
 
   const handleSaved = (tour) => {
     qc.invalidateQueries({ queryKey: ['admin-tours'] });
     qc.invalidateQueries({ queryKey: ['tours'] });
-    // A freshly created tour comes back with its slug — drop straight into editing
-    // it so the operator can keep opening dates without hunting for it in the list.
-    if (!slug && tour?.slug) setSlug(tour.slug);
+    
+    if (view === 'NEW' && tour?.slug) {
+      // If we just created it, immediately open it to edit so they can add dates
+      setView(tour.slug);
+    } else {
+      // If we were just editing, go back to the grid
+      setView('LIST');
+    }
   };
 
-  return (
-    <section className="space-y-3">
-      <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
-        <div>
-          <h2 className="text-sm font-semibold">Packages</h2>
-          <p className="faint text-xs">
-            Build a new tour, or pick one to edit its details and departures.
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="sr-only">Choose a package to edit</span>
-          <select
-            className="field h-9 max-w-[16rem] py-0"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
+  const handleDelete = (id, title) => {
+    if (window.confirm(`Are you sure you want to delete "${title}"?\n\nThis cannot be undone.`)) {
+      deleteTour.mutate(id);
+    }
+  };
+
+  // =========================================================================
+  // VIEW 1: The Grid List (This is where your code goes!)
+  // =========================================================================
+  if (view === 'LIST') {
+    return (
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Packages</h2>
+            <p className="faint text-xs">Manage your tours and their live departures.</p>
+          </div>
+          <button 
+            onClick={() => setView('NEW')}
+            className="btn-primary"
           >
-            <option value="">＋ New package</option>
-            {tours.map((t) => (
-              <option key={t.id} value={t.slug}>
-                {t.title}
-              </option>
-            ))}
-          </select>
-        </label>
+            ＋ New package
+          </button>
+        </div>
+
+        {deleteTour.isError && <ErrorNote error={deleteTour.error} />}
+
+        {/* ---> HERE IS YOUR GRID OF CARDS <--- */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {tours.map(tour => (
+            <AdminChangableCard 
+              key={tour.id} 
+              tour={tour} 
+              onEdit={(slug) => setView(slug)} 
+              onDelete={handleDelete}
+              isDeleting={deleteTour.isPending && deleteTour.variables === tour.id}
+            />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  // =========================================================================
+  // VIEW 2: The Tour Builder (Create / Edit form)
+  // =========================================================================
+  return (
+    <section className="space-y-4 rounded-xl border border-sand-200 p-4 dark:border-ink-700">
+      <div className="flex items-center justify-between border-b border-sand-200 pb-3 dark:border-ink-700">
+        <h2 className="text-sm font-semibold">
+          {view === 'NEW' ? 'Create New Package' : 'Edit Package'}
+        </h2>
+        <button 
+          onClick={() => setView('LIST')}
+          className="text-xs font-semibold text-sand-500 hover:text-ink-900 dark:text-sand-400 dark:hover:text-sand-50"
+        >
+          ← Back to packages
+        </button>
       </div>
 
-      {slug && editing.isPending ? (
-        <p className="faint text-sm" role="status">
-          Loading package…
-        </p>
-      ) : slug && editing.isError ? (
-        <ErrorNote error={editing.error} />
+      {editing.isError && <ErrorNote error={editing.error} />}
+
+      {fetchSlug && editing.isPending ? (
+        <p className="faint text-sm" role="status">Loading package details…</p>
       ) : (
-        // key forces a clean remount (and re-seed) when switching tours or back to new.
         <TourBuilder
-          key={slug || 'new'}
-          initialData={slug ? editing.data?.tour ?? null : null}
+          key={view}
+          initialData={fetchSlug ? editing.data?.tour ?? null : null}
           onSaved={handleSaved}
         />
       )}

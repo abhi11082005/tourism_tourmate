@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api.js';
 import { shortDate } from '../lib/format.js';
@@ -23,6 +23,9 @@ import { ErrorNote } from './ui.jsx';
 export default function GuideAssignmentTable() {
   const qc = useQueryClient();
   const [onlyUnassigned, setOnlyUnassigned] = useState(true);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const perPage = 20;
 
   const departures = useQuery({
     queryKey: ['departures', { onlyUnassigned }],
@@ -43,8 +46,31 @@ export default function GuideAssignmentTable() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['departures'] }),
   });
 
-  const rows = departures.data?.departures ?? (Array.isArray(departures.data) ? departures.data : []);
+  const allRows = departures.data?.departures ?? (Array.isArray(departures.data) ? departures.data : []);
   const guides = guidesQuery.data?.guides ?? (Array.isArray(guidesQuery.data) ? guidesQuery.data : []);
+
+  // Client-side search + pagination
+  const { rows, totalPages } = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const filtered = term
+      ? allRows.filter((d) => {
+          const title = (d.tourTitle ?? d.title ?? '').toLowerCase();
+          const date = (d.date ?? '').toLowerCase();
+          return title.includes(term) || date.includes(term);
+        })
+      : allRows;
+
+    const total = Math.ceil(filtered.length / perPage);
+    const start = (page - 1) * perPage;
+    const paginated = filtered.slice(start, start + perPage);
+    return { rows: paginated, totalPages: total };
+  }, [allRows, search, page]);
+
+  // Reset to page 1 when search changes
+  const handleSearch = (val) => {
+    setSearch(val);
+    setPage(1);
+  };
 
   const savingId = assign.isPending ? assign.variables?.slotId : null;
 
@@ -72,11 +98,28 @@ export default function GuideAssignmentTable() {
         <p className="faint mt-3 text-sm" role="status">Loading departures…</p>
       ) : departures.isError ? (
         <p className="faint mt-3 text-sm">Departures aren’t available yet.</p>
-      ) : rows.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <p className="faint mt-3 text-sm">
           {onlyUnassigned ? 'Every upcoming departure has a guide. Nice.' : 'No departures in the next 60 days.'}
         </p>
       ) : (
+        <>
+          {/* Search bar */}
+          <div className="mt-3">
+            <label className="sr-only" htmlFor="departure-search">Search by tour name or date</label>
+            <input
+              id="departure-search"
+              type="search"
+              className="field w-full text-sm sm:max-w-sm"
+              placeholder="Search by tour name or date…"
+              value={search}
+              onChange={(e) => handleSearch(e.target.value)}
+            />
+          </div>
+
+          {rows.length === 0 ? (
+            <p className="faint mt-3 text-sm">No departures match your search.</p>
+          ) : (
         <>
           {/* Table on sm+ */}
           <div className="mt-3 hidden overflow-x-auto sm:block">
@@ -135,7 +178,36 @@ export default function GuideAssignmentTable() {
               </li>
             ))}
           </ul>
-        </>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-sand-200 pt-4 dark:border-ink-700">
+              <p className="faint text-xs">
+                Page {page} of {totalPages}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-ghost h-8 px-3 text-xs"
+                  disabled={page === 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost h-8 px-3 text-xs"
+                  disabled={page === totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+          </>
+        )}
+      </>
       )}
     </section>
   );

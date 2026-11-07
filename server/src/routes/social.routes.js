@@ -139,7 +139,7 @@ socialRouter.get(
   asyncHandler(async (req, res) => {
     res.json({ items: await social.listWishlist(req.user.id) });
   })
-);
+); 
 
 socialRouter.post(
   '/wishlist/:tourId',

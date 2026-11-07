@@ -2,33 +2,29 @@ import { useEffect, useRef } from 'react';
 import { useCoupon } from '../hooks/useCoupon.js';
 import { inr } from '../lib/format.js';
 
-/*
- * Coupon entry for the booking rail. The whole reason it lives *here* and not on the
- * checkout page: the code has to be priced BEFORE the "hold my seats for 10 minutes"
- * button fires, so we never lock inventory against a total the coupon was about to
- * change. This field previews the discount; the parent folds `appliedCode` into
- * api.checkout when the traveller commits.
- *
- * All amounts shown come straight from the server's validate response — this
- * component does no arithmetic. It just displays what the code is worth for the slot
- * and seat count currently selected, and reports the applied code upward.
- */
-
-export default function CouponField({ tourId, slotId, seatCount, selectedOptions, onAppliedChange }) {
-  const { code, setCode, apply, clear, isChecking, error, applied, appliedCode } = useCoupon({
+export default function CouponField({ tourId, slotId, seatCount, selectedOptions, onAppliedChange, onAmountChange }) {
+  const { code, setCode, apply, clear, isChecking, error, applied, appliedCode, couponAmount } = useCoupon({
     tourId,
     slotId,
     seatCount,
     selectedOptions,
   });
+  
+  console.log("applied coupon amount in CouponField:", couponAmount);
 
-  // Report the applied code up without making the parent's callback identity a
-  // dependency (it's usually an inline arrow), which would loop the effect.
-  const notify = useRef(onAppliedChange);
-  notify.current = onAppliedChange;
+  // Notify parent of applied object changes
+  const notifyApplied = useRef(onAppliedChange);
+  notifyApplied.current = onAppliedChange;
   useEffect(() => {
-    notify.current?.(appliedCode);
-  }, [appliedCode]);
+    notifyApplied.current?.(applied);
+  }, [applied]);
+
+  // Notify parent of discount amount changes specifically
+  const notifyAmount = useRef(onAmountChange);
+  notifyAmount.current = onAmountChange;
+  useEffect(() => {
+    notifyAmount.current?.(couponAmount);
+  }, [couponAmount]);
 
   const disabled = !slotId;
 
@@ -66,7 +62,7 @@ export default function CouponField({ tourId, slotId, seatCount, selectedOptions
   return (
     <div>
       <label className="block text-sm font-medium" htmlFor="coupon-code">
-        Have a coupon?
+        Have a coupon? 
       </label>
       <div className="mt-1 flex gap-2">
         <input

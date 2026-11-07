@@ -51,6 +51,11 @@ export default function CampaignManager() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   });
 
+  const drop = useMutation({
+    mutationFn: (id) => api.deleteCampaign(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  });
+
   const set = (key, cast = (v) => v) => (e) =>
     setForm((f) => ({ ...f, [key]: cast(e.target.type === 'checkbox' ? e.target.checked : e.target.value) }));
 
@@ -58,15 +63,23 @@ export default function CampaignManager() {
 
   function submit(e) {
     e.preventDefault();
-    create.mutate({
+    const body = {
       name: form.name.trim(),
       discountPercent: Number(form.discountPercent),
-      bannerUrl: form.bannerUrl.trim() || null,
-      startsAt: form.startsAt || null,
-      endsAt: form.endsAt || null,
       isActive: form.isActive,
-    });
+    };
+    // Only include optional fields when they have a value
+    if (form.bannerUrl.trim()) body.bannerUrl = form.bannerUrl.trim();
+    if (form.startsAt) body.startsAt = new Date(form.startsAt).toISOString();
+    if (form.endsAt) body.endsAt = new Date(form.endsAt).toISOString();
+    create.mutate(body);
   }
+
+  const handleDelete = (id, name) => {
+    if (window.confirm(`Are you sure you want to delete the campaign "${name}"?\n\nThis cannot be undone.`)) {
+      drop.mutate(id);
+    }
+  };
 
   return (
     <section className="card p-4">
@@ -105,7 +118,8 @@ export default function CampaignManager() {
         </button>
       </form>
 
-      <ErrorNote error={toggle.error} />
+      {/* Show toggle or drop errors */}
+      <ErrorNote error={toggle.error || drop.error} />
 
       <div className="mt-5">
         {list.isPending ? (
@@ -121,7 +135,9 @@ export default function CampaignManager() {
                 key={c.id}
                 campaign={c}
                 onToggle={() => toggle.mutate({ id: c.id, isActive: !c.isActive })}
-                busy={toggle.isPending && toggle.variables?.id === c.id}
+                toggleBusy={toggle.isPending && toggle.variables?.id === c.id}
+                onDelete={() => handleDelete(c.id, c.name)}
+                deleteBusy={drop.isPending && drop.variables === c.id}
               />
             ))}
           </ul>
@@ -131,13 +147,13 @@ export default function CampaignManager() {
   );
 }
 
-function CampaignCard({ campaign, onToggle, busy }) {
+function CampaignCard({ campaign, onToggle, toggleBusy, onDelete, deleteBusy }) {
   const window = [campaign.startsAt, campaign.endsAt]
     .map((d) => (d ? shortDate(String(d).slice(0, 10)) : null))
     .filter(Boolean);
 
   return (
-    <li className="overflow-hidden rounded-xl border border-sand-200 dark:border-ink-700">
+    <li className="flex flex-col overflow-hidden rounded-xl border border-sand-200 dark:border-ink-700">
       {campaign.bannerUrl ? (
         <img src={campaign.bannerUrl} alt="" className="h-24 w-full object-cover" loading="lazy" />
       ) : (
@@ -145,7 +161,7 @@ function CampaignCard({ campaign, onToggle, busy }) {
           no banner
         </div>
       )}
-      <div className="p-3">
+      <div className="flex flex-1 flex-col p-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{campaign.name}</p>
@@ -154,7 +170,7 @@ function CampaignCard({ campaign, onToggle, busy }) {
           <button
             type="button"
             onClick={onToggle}
-            disabled={busy}
+            disabled={toggleBusy || deleteBusy}
             aria-pressed={campaign.isActive}
             className={[
               'chip shrink-0',
@@ -163,12 +179,23 @@ function CampaignCard({ campaign, onToggle, busy }) {
                 : 'bg-sand-100 text-sand-500 dark:bg-ink-800 dark:text-sand-400',
             ].join(' ')}
           >
-            {busy ? '…' : campaign.isActive ? 'Live' : 'Paused'}
+            {toggleBusy ? '…' : campaign.isActive ? 'Live' : 'Paused'}
           </button>
         </div>
-        <p className="faint mt-1 text-xs">
+        <p className="faint mt-1 flex-1 text-xs">
           {window.length === 2 ? `${window[0]} – ${window[1]}` : window.length === 1 ? `from ${window[0]}` : 'always on while live'}
         </p>
+
+        <div className="mt-3 flex justify-end border-t border-sand-100 pt-2 dark:border-ink-700/50">
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleteBusy || toggleBusy}
+            className="text-xs font-semibold text-red-600 transition-colors hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
+          >
+            {deleteBusy ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
       </div>
     </li>
   );

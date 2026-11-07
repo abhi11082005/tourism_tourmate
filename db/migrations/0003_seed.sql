@@ -118,5 +118,5 @@ SELECT t.id, 'options', NULL,
        'Upgrade options and per-seat prices: ' || t.options::text
 FROM tours t
 ON CONFLICT DO NOTHING;
-
+ 
 COMMIT;

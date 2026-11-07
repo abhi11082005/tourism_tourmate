@@ -127,7 +127,11 @@ export default function MapPinManager({ initialView = { latitude: 26.9124, longi
     staleTime: 30_000,
   });
 
-  const pinCollection = useMemo(() => toPinCollection(pinsQuery.data?.pins ?? pinsQuery.data ?? []), [pinsQuery.data]);
+  const pinCollection = useMemo(() => {
+    const raw = pinsQuery.data?.pins ?? pinsQuery.data;
+    const arr = Array.isArray(raw) ? raw : [];
+    return toPinCollection(arr);
+  }, [pinsQuery.data]);
 
   const create = useMutation({
     mutationFn: () =>

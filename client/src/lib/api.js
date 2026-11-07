@@ -166,6 +166,10 @@ export const api = {
   byCategory: (category, signal) => request(`/attractions/category/${category}`, { signal }),
   pins: (bounds, signal) => request('/attractions/pins', { query: bounds, signal }),
 
+  // Added spotlight specific endpoints based on recent route creations
+  spotlightsByCategory: (category, query, signal) => request(`/spotlights/category/${category}`, { query, signal }),
+  getSpotlightDetails: (id, query, signal) => request(`/spotlights/${id}`, { query, signal }),
+
   // ------------------------------------------------------------ booking
   calendar: (tourId, { from, to }, signal) =>
     request(`/bookings/calendar/${tourId}`, { query: { from, to }, signal }),
@@ -221,33 +225,38 @@ export const api = {
   route: (body, signal) => request('/routing/route', { method: 'POST', body, signal }),
   guidedRoute: (slotId, signal) => request(`/routing/guided/${slotId}`, { signal }),
 
-  // -------------------------------------------------------------- admin
+// -------------------------------------------------------------- admin
   analytics: (signal) => request('/admin/analytics', { signal }),
+  listToursAdmin: (signal) => request('/admin/tours', { method: 'GET', signal }),
   createTourAdmin: (body) => request('/admin/tours', { method: 'POST', body }),
   // The wizard reuses the same shape for create and edit; only the verb differs.
   updateTourAdmin: (tourId, body) => request(`/admin/tours/${tourId}`, { method: 'PATCH', body }),
+  deleteTourAdmin: (tourId) => request(`/admin/tours/${tourId}`, { method: 'DELETE' }),
   createSlots: (tourId, body) => request(`/admin/tours/${tourId}/slots`, { method: 'POST', body }),
   updateSlot: (slotId, body) => request(`/admin/slots/${slotId}`, { method: 'PATCH', body }),
   createAttraction: (body) => request('/admin/attractions', { method: 'POST', body }),
 
   // Guide roster for the assignment dropdown, and the departures that still need
   // one. `updateSlot({ guideId })` (above) is what actually pins a guide to a date.
-  guides: (signal) => request('/admin/guides', { signal }),
+  guides: (signal) => request('/admin/guides', {method: 'GET', signal}),
   upcomingDepartures: (query, signal) => request('/admin/departures', { query, signal }),
 
   // Discount engine. Coupons are code-entered at checkout; campaigns auto-apply and
   // drive the homepage banner + strike-through cards. Toggles flip active without
   // a destructive delete, so a festival can be re-run next year.
-  listCoupons: (signal) => request('/admin/coupons', { signal }),
+  listCoupons: (signal) => request('/admin/coupons', { method: 'GET', signal }),
   createCoupon: (body) => request('/admin/coupons', { method: 'POST', body }),
   setCouponActive: (id, isActive) =>
     request(`/admin/coupons/${id}`, { method: 'PATCH', body: { isActive } }),
+  deleteCoupon: (id) => request(`/admin/coupons/${id}`, { method: 'DELETE' }),
+
   listCampaigns: (signal) => request('/admin/campaigns', { signal }),
   createCampaign: (body) => request('/admin/campaigns', { method: 'POST', body }),
   setCampaignActive: (id, isActive) =>
     request(`/admin/campaigns/${id}`, { method: 'PATCH', body: { isActive } }),
+  deleteCampaign: (id) => request(`/admin/campaigns/${id}`, { method: 'DELETE' }),
 };
-
+ 
 /**
  * "Ask the Expert" — consumes the SSE stream token by token.
  * Reading the stream by hand (rather than EventSource) is what lets us send a

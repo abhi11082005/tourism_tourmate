@@ -9,6 +9,7 @@ import {
   getSlotCapacity,
   getHeldSeats,
 } from './seatLock.service.js';
+import { validateCoupon, incrementCouponUse } from './offers.service.js';
 import { conflict, notFound, forbidden, badRequest } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
 
@@ -70,7 +71,7 @@ export async function quote({ tourId, slotId, seatCount, selectedOptions }) {
  * Step 1 of checkout — reserve seats for 10 minutes. Requires login: this is the
  * payment boundary the requirements call out.
  */
-export async function startCheckout({ userId, slotId, seatCount, selectedOptions }) {
+export async function startCheckout({ userId, slotId, seatCount, selectedOptions, couponCode, campaignId }) {
   const slot = await getSlotCapacity(slotId);
   const tour = await queryOne(
     'SELECT id, title, base_price, options FROM tours WHERE id = $1 AND is_published',
@@ -79,12 +80,72 @@ export async function startCheckout({ userId, slotId, seatCount, selectedOptions
   if (!tour) throw notFound('Tour not found');
 
   // Price before holding, so a bad configuration never burns inventory.
-  const { totalAmount, breakdown } = computeQuote({
+  const quoted = computeQuote({
     tour,
     selectedOptions,
     seatCount,
     priceModifier: slot.price_modifier,
   });
+
+  let { totalAmount, breakdown } = quoted;
+  const baseTotal = totalAmount; 
+  let totalDiscountAmount = 0;
+  
+  let coupon = null;
+  let campaign = null;
+
+  // 1. Process Campaign Discount
+  if (campaignId) {
+    // Make sure your table and column names match your DB schema
+    campaign = await queryOne(
+      `SELECT id, name, discount_percent 
+         FROM campaigns 
+        WHERE id = $1 AND is_active = true 
+          AND starts_at <= NOW() 
+          AND (ends_at IS NULL OR ends_at > NOW())`,
+      [campaignId]
+    );
+
+    if (!campaign) {
+      throw badRequest('Invalid or expired discount campaign');
+    }
+
+    const campaignDiscount = Math.floor((baseTotal * campaign.discount_percent) / 100);
+    totalDiscountAmount += Number(campaignDiscount);
+
+    breakdown.lines.push({
+      key: 'campaign',
+      label: `Campaign: ${campaign.name} (${campaign.discount_percent}%)`,
+      perSeat: null,
+      amount: `-${campaignDiscount}`,
+    });
+  }
+
+  // 2. Process Coupon Discount
+  if (couponCode) {
+    const applied = await validateCoupon({ couponCode, orderTotal: baseTotal });
+    coupon = applied.coupon;
+    totalDiscountAmount += Number(applied.discountAmount);
+
+    breakdown.lines.push({
+      key: 'coupon',
+      label: `Coupon ${applied.coupon.code}`,
+      perSeat: null,
+      amount: `-${applied.discountAmount}`,
+    });
+  }
+
+  // 3. Finalize Total and Breakdown if any discounts were applied
+  if (campaignId || couponCode) {
+    totalAmount = Math.max(0, baseTotal - totalDiscountAmount);
+    breakdown.subtotal = baseTotal;
+    breakdown.discount = totalDiscountAmount;
+    breakdown.total = totalAmount;
+    
+    // Attach codes/IDs to the breakdown for the confirmBooking step to use later
+    if (coupon) breakdown.couponCode = coupon.code;
+    if (campaign) breakdown.campaignId = campaign.id;
+  }
 
   const hold = await acquireHold({ slotId, seatCount, userId });
 
@@ -102,7 +163,7 @@ export async function startCheckout({ userId, slotId, seatCount, selectedOptions
         slotId,
         slot.slot_date,
         seatCount,
-        totalAmount,
+        totalAmount, // This is now the fully discounted total
         JSON.stringify(breakdown),
         JSON.stringify(selectedOptions ?? {}),
         hold.holdId,
@@ -110,7 +171,7 @@ export async function startCheckout({ userId, slotId, seatCount, selectedOptions
       ]
     );
 
-    return { booking, hold, breakdown, tourTitle: tour.title };
+    return { booking, hold, breakdown, tourTitle: tour.title, coupon, campaign };
   } catch (err) {
     // Never leave seats held for a booking row that failed to insert.
     await releaseHold(hold.holdId).catch(() => {});
@@ -195,6 +256,33 @@ export async function confirmBooking({ bookingId, userId, payment }) {
           payment.signatureVerified === true,
           JSON.stringify(payment.raw ?? {}),
         ]
+      );
+    }
+
+    /*
+     * Increment used_count for the coupon, if one was applied. The code comes from
+     * price_breakdown.couponCode (written by startCheckout). Runs inside the
+     * transaction so a confirm-rollback never burns a use, and uses SELECT FOR
+     * UPDATE internally to prevent concurrent redeems from exceeding usage_limit.
+     */
+    const couponCode = booking.price_breakdown?.couponCode;
+    if (couponCode) {
+      await incrementCouponUse(couponCode);
+      // Audit trail for per-user usage caps (future feature) and reconciliation.
+      await client.query(
+        `INSERT INTO coupon_redemptions (coupon_id, booking_id, user_id, discount)
+         SELECT id, $2, $3,
+                CASE WHEN discount_type = 'PERCENT'
+                     THEN LEAST(
+                       ROUND(($4::numeric * discount_value) / 100),
+                       COALESCE(max_discount * 100, ($4::numeric * discount_value) / 100)
+                     )
+                     ELSE discount_value * 100
+                END
+           FROM coupons
+          WHERE code = $1
+         ON CONFLICT (coupon_id, booking_id) DO NOTHING`,
+        [couponCode, bookingId, booking.user_id, booking.total_amount]
       );
     }
 

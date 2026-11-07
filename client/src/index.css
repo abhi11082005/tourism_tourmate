@@ -79,4 +79,34 @@
   .notice-ok {
     @apply rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200;
   }
+  
+}
+/*
+ * OPTIONAL — paste inside `@layer components { ... }` in client/src/index.css.
+ * Gives Quick View a soft open animation. Without it everything still works.
+ * Your existing prefers-reduced-motion rule already shortens these to ~0ms.
+ */
+.qv-dialog[open] {
+  animation: qv-in 220ms ease-out;
+}
+.qv-dialog[open]::backdrop {
+  animation: qv-fade 220ms ease-out;
+}
+@keyframes qv-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes qv-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

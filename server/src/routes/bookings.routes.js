@@ -1,42 +1,55 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import rateLimit from 'express-rate-limit';
-import { asyncHandler, validate } from '../middleware/index.js';
-import { requireAuth, optionalAuth } from '../middleware/auth.js';
-import * as booking from '../services/booking.service.js';
-import * as documents from '../services/documents.service.js';
-import { getAvailability, extendHold, releaseHold } from '../services/seatLock.service.js';
+import { Router } from "express";
+import { z } from "zod";
+import rateLimit from "express-rate-limit";
+import { asyncHandler, validate } from "../middleware/index.js";
+import { requireAuth, optionalAuth } from "../middleware/auth.js";
+import * as booking from "../services/booking.service.js";
+import * as documents from "../services/documents.service.js";
+import {
+  getAvailability,
+  extendHold,
+  releaseHold,
+} from "../services/seatLock.service.js";
 import {
   assertOrderBelongsToBooking,
   createGatewayOrder,
   recordFailedAttempt,
   toMinorUnits,
   verifyGatewaySignature,
-} from '../services/payments.service.js';
-import { env, paymentsEnabled } from '../config/env.js';
-import { query } from '../db/pool.js';
+} from "../services/payments.service.js";
+import { env, paymentsEnabled } from "../config/env.js";
+import { query } from "../db/pool.js";
+import { validateCoupon } from "../services/offers.service.js";
 
 export const bookingRouter = Router();
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 const uuid = z.string().uuid();
 
 // Holding seats is a write to shared inventory: cap it per IP.
-const holdLimiter = rateLimit({ windowMs: 60_000, limit: 8, standardHeaders: 'draft-7' });
+const holdLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 8,
+  standardHeaders: "draft-7",
+});
 
 // Order creation hits Razorpay's API, so it gets its own, tighter budget. The
 // happy path needs one call per checkout; anything more is a retry or a bot.
-const orderLimiter = rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: 'draft-7' });
+const orderLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: "draft-7",
+});
 
 // ---------------------------------------------------------------- browsing
 // Calendar and quotes stay open to guests so the configurator works before login.
 bookingRouter.get(
-  '/calendar/:tourId',
+  "/calendar/:tourId",
   optionalAuth,
-  validate('params', z.object({ tourId: uuid })),
-  validate('query', z.object({ from: isoDate, to: isoDate })),
+  validate("params", z.object({ tourId: uuid })),
+  validate("query", z.object({ from: isoDate, to: isoDate })),
   asyncHandler(async (req, res) => {
-    res.set('cache-control', 'no-store'); // seat counts must never be cached
+    res.set("cache-control", "no-store"); // seat counts must never be cached
     res.json({
       dates: await booking.getCalendar({
         tourId: req.params.tourId,
@@ -44,15 +57,15 @@ bookingRouter.get(
         to: req.query.to,
       }),
     });
-  })
+  }),
 );
 
 bookingRouter.get(
-  '/availability/:slotId',
-  validate('params', z.object({ slotId: uuid })),
+  "/availability/:slotId",
+  validate("params", z.object({ slotId: uuid })),
   asyncHandler(async (req, res) => {
     const slot = await getAvailability(req.params.slotId);
-    res.set('cache-control', 'no-store');
+    res.set("cache-control", "no-store");
     res.json({
       slotId: slot.id,
       date: slot.slot_date,
@@ -61,66 +74,119 @@ bookingRouter.get(
       heldSeats: slot.held_seats,
       isOpen: slot.is_open,
     });
-  })
+  }),
 );
 
 bookingRouter.post(
-  '/quote',
+  "/quote",
   optionalAuth,
   validate(
-    'body',
+    "body",
     z.object({
       tourId: uuid,
       slotId: uuid.optional(),
       seatCount: z.number().int().min(1).max(20),
       selectedOptions: z.record(z.union([z.boolean(), z.string()])).default({}),
-    })
+    }),
   ),
   asyncHandler(async (req, res) => {
     res.json(await booking.quote(req.body));
-  })
+  }),
+);
+
+/*
+ * Coupon validation — called by the booking rail before checkout.
+ *
+ * Computes a full quote (base + options), then validates the coupon against that
+ * total. Returns { coupon, discountAmount, finalAmount } so the client can show a
+ * preview. The actual discount is recomputed server-side at checkout time; this is
+ * display-only.
+ *
+ * No auth required: guest users can validate a code they found before signing in.
+ * Rate-limited to prevent brute-force code enumeration.
+ */
+bookingRouter.post(
+  "/validate-coupon",
+  optionalAuth,
+  rateLimit({ windowMs: 60_000, limit: 12, standardHeaders: "draft-7" }),
+  validate(
+    "body",
+    z.object({
+      tourId: uuid.optional(),
+      slotId: uuid,
+      seatCount: z.number().int().min(1).max(20),
+      selectedOptions: z.record(z.union([z.boolean(), z.string()])).default({}),
+      couponCode: z.string().min(1).max(40),
+    }),
+  ),
+  asyncHandler(async (req, res) => {
+    // Compute the order total the same way /quote does.
+    const { totalAmount } = await booking.quote({
+      tourId: req.body.tourId,
+      slotId: req.body.slotId,
+      seatCount: req.body.seatCount,
+      selectedOptions: req.body.selectedOptions,
+    });
+
+    // Validate the coupon against that total.
+    const result = await validateCoupon({
+      couponCode: req.body.couponCode,
+      orderTotal: totalAmount,
+    });
+
+    res.json(result);
+  }),
 );
 
 // ---------------------------------------------------------------- checkout
 
-
 // Everything below requires a signed-in user: this is the payment boundary.
 bookingRouter.post(
-  '/checkout',
+  "/checkout",
   requireAuth,
   holdLimiter,
   validate(
-    'body',
+    "body",
     z.object({
       slotId: uuid,
       seatCount: z.number().int().min(1).max(20),
       selectedOptions: z.record(z.union([z.boolean(), z.string()])).default({}),
-    })
+      // Priced by startCheckout *before* it acquires the hold, so the seats are
+      // ever only locked against the discounted total. Without this key zod's
+      // .object() silently stripped it and the discount was lost.
+      couponCode: z.string().min(1).max(40).optional(),
+      // Accept the campaign ID passed from the frontend
+      campaignId: z.number().int().positive().optional(),
+    }),
   ),
   asyncHandler(async (req, res) => {
-    const result = await booking.startCheckout({ userId: req.user.id, ...req.body });
+    const result = await booking.startCheckout({
+      userId: req.user.id,
+      ...req.body,
+    });
     res.status(201).json({
       bookingId: result.booking.id,
       reference: result.booking.reference,
       totalAmount: result.booking.total_amount,
       breakdown: result.breakdown,
+      coupon: result.coupon,
+      campaign: result.campaign, // Pass the campaign details back to the client
       holdId: result.hold.holdId,
       holdExpiresAt: result.hold.expiresAt,
       seatsRemaining: result.hold.remainingSeats,
     });
-  })
+  }),
 );
-
 bookingRouter.get(
-  '/:bookingId/state',
+  "/:bookingId/state",
   requireAuth,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   asyncHandler(async (req, res) => {
     const state = await booking.getCheckoutState({
       bookingId: req.params.bookingId,
       userId: req.user.id,
     });
-    res.set('cache-control', 'no-store');
+    res.set("cache-control", "no-store");
     res.json({
       status: state.booking.status,
       reference: state.booking.reference,
@@ -132,31 +198,31 @@ bookingRouter.get(
       // the traveller click Pay and hit a 503. A boolean only — never the keys.
       paymentsEnabled,
     });
-  })
+  }),
 );
 
 bookingRouter.post(
-  '/:bookingId/extend',
+  "/:bookingId/extend",
   requireAuth,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   asyncHandler(async (req, res) => {
     const state = await booking.getCheckoutState({
       bookingId: req.params.bookingId,
       userId: req.user.id,
     });
     const seconds = await extendHold(state.booking.hold_id);
-    await query('UPDATE bookings SET expires_at = NOW() + ($2 || \' seconds\')::interval WHERE id = $1', [
-      req.params.bookingId,
-      String(seconds),
-    ]);
+    await query(
+      "UPDATE bookings SET expires_at = NOW() + ($2 || ' seconds')::interval WHERE id = $1",
+      [req.params.bookingId, String(seconds)],
+    );
     res.json({ secondsLeft: seconds });
-  })
+  }),
 );
 
 bookingRouter.post(
-  '/:bookingId/abandon',
+  "/:bookingId/abandon",
   requireAuth,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   asyncHandler(async (req, res) => {
     const state = await booking.getCheckoutState({
       bookingId: req.params.bookingId,
@@ -166,10 +232,10 @@ bookingRouter.post(
     await query(
       `UPDATE bookings SET status = 'CANCELLED', cancelled_at = NOW(), hold_id = NULL
         WHERE id = $1 AND status = 'PENDING'`,
-      [req.params.bookingId]
+      [req.params.bookingId],
     );
     res.json({ released: true });
-  })
+  }),
 );
 
 // ------------------------------------------------------------ post-payment
@@ -183,16 +249,16 @@ bookingRouter.post(
  * letting the browser call Razorpay directly.
  */
 bookingRouter.post(
-  '/:bookingId/order',
+  "/:bookingId/order",
   requireAuth,
   orderLimiter,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   asyncHandler(async (req, res) => {
     const order = await createGatewayOrder({
       bookingId: req.params.bookingId,
       userId: req.user.id,
     });
-    res.set('cache-control', 'no-store');
+    res.set("cache-control", "no-store");
     res.json({
       // The gateway name comes from the service so the client never hardcodes it.
       gateway: order.gateway,
@@ -206,7 +272,7 @@ bookingRouter.post(
       // carries id, role and email, so reading them off req.user would be blank.
       prefill: order.prefill,
     });
-  })
+  }),
 );
 
 /*
@@ -214,25 +280,28 @@ bookingRouter.post(
  * keeps the payments ledger honest without blocking the traveller's next try.
  */
 bookingRouter.post(
-  '/:bookingId/payment-failed',
+  "/:bookingId/payment-failed",
   requireAuth,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   validate(
-    'body',
+    "body",
     z.object({
       orderId: z.string().min(4).max(120),
       reason: z.string().max(300).optional(),
-    })
+    }),
   ),
   asyncHandler(async (req, res) => {
     // Ownership first, then prove the order was created for this booking. Without
     // both, anyone could mark anyone's payment failed by guessing a booking id.
     // getCheckoutState answers 403 (not 404) for someone else's booking — see the
     // 404 note in payments.service.js for why the other path differs.
-    await booking.getCheckoutState({ bookingId: req.params.bookingId, userId: req.user.id });
+    await booking.getCheckoutState({
+      bookingId: req.params.bookingId,
+      userId: req.user.id,
+    });
     await assertOrderBelongsToBooking({
       bookingId: req.params.bookingId,
-      gateway: 'razorpay',
+      gateway: "razorpay",
       orderId: req.body.orderId,
     });
     await recordFailedAttempt({
@@ -241,24 +310,24 @@ bookingRouter.post(
       reason: req.body.reason,
     });
     res.json({ recorded: true });
-  })
+  }),
 );
 
 bookingRouter.post(
-  '/:bookingId/confirm',
+  "/:bookingId/confirm",
   requireAuth,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   validate(
-    'body',
+    "body",
     z.object({
       // Only the gateway that is actually wired. A 'stripe' value would have no
       // verification path (no raw body or timestamp is passed here) and could
       // only ever fail, so accepting it would just be a misleading enum member.
-      gateway: z.enum(['razorpay']),
+      gateway: z.enum(["razorpay"]),
       orderId: z.string().min(4).max(120),
       paymentId: z.string().min(4).max(120).optional(),
       signature: z.string().min(8).max(512),
-    })
+    }),
   ),
   asyncHandler(async (req, res) => {
     /*
@@ -285,10 +354,13 @@ bookingRouter.post(
       await recordFailedAttempt({
         bookingId: req.params.bookingId,
         orderId: req.body.orderId,
-        reason: 'signature mismatch',
+        reason: "signature mismatch",
       });
       return res.status(400).json({
-        error: { code: 'SIGNATURE_INVALID', message: 'Payment could not be verified' },
+        error: {
+          code: "SIGNATURE_INVALID",
+          message: "Payment could not be verified",
+        },
       });
     }
 
@@ -312,19 +384,25 @@ bookingRouter.post(
         },
       },
     });
-    res.json({ booking: result.booking, alreadyConfirmed: result.alreadyConfirmed });
-  })
+    res.json({
+      booking: result.booking,
+      alreadyConfirmed: result.alreadyConfirmed,
+    });
+  }),
 );
 
 bookingRouter.post(
-  '/:bookingId/cancel',
+  "/:bookingId/cancel",
   requireAuth,
-  validate('params', z.object({ bookingId: uuid })),
+  validate("params", z.object({ bookingId: uuid })),
   asyncHandler(async (req, res) => {
     res.json(
-      await booking.cancelBooking({ bookingId: req.params.bookingId, userId: req.user.id })
+      await booking.cancelBooking({
+        bookingId: req.params.bookingId,
+        userId: req.user.id,
+      }),
     );
-  })
+  }),
 );
 
 /*
@@ -336,7 +414,7 @@ bookingRouter.post(
  * which is the order the Trips module renders without re-sorting.
  */
 bookingRouter.get(
-  '/mine',
+  "/mine",
   requireAuth,
   asyncHandler(async (req, res) => {
     const { rows } = await query(
@@ -361,7 +439,7 @@ bookingRouter.get(
                  CASE WHEN b.booking_date >= CURRENT_DATE THEN b.booking_date END ASC,
                  b.booking_date DESC
         LIMIT 50`,
-      [req.user.id]
+      [req.user.id],
     );
 
     res.json({
@@ -380,10 +458,13 @@ bookingRouter.get(
         tourSlug: b.tour_slug,
         coverImage: b.cover_image,
         paymentStatus: b.payment_status,
-        refund: b.refund_amount == null ? null : { amount: b.refund_amount, at: b.refunded_at },
+        refund:
+          b.refund_amount == null
+            ? null
+            : { amount: b.refund_amount, at: b.refunded_at },
       })),
     });
-  })
+  }),
 );
 
 /*
@@ -398,23 +479,23 @@ const documentRoute = (path, kind) =>
   bookingRouter.get(
     path,
     requireAuth,
-    validate('params', z.object({ bookingId: uuid })),
+    validate("params", z.object({ bookingId: uuid })),
     asyncHandler(async (req, res) => {
       const record = await documents.loadBookingDocument({
         bookingId: req.params.bookingId,
         userId: req.user.id,
-        isStaff: req.user.role === 'ADMIN',
+        isStaff: req.user.role === "ADMIN",
       });
       documents.assertDocumentAllowed(record, kind);
 
       res.set({
-        'content-type': 'application/pdf',
-        'content-disposition': `attachment; filename="${documents.documentFilename(record, kind)}"`,
-        'cache-control': 'private, no-store',
+        "content-type": "application/pdf",
+        "content-disposition": `attachment; filename="${documents.documentFilename(record, kind)}"`,
+        "cache-control": "private, no-store",
       });
       documents.streamBookingDocument({ booking: record, kind, stream: res });
-    })
+    }),
   );
 
-documentRoute('/:bookingId/ticket.pdf', 'TICKET');
-documentRoute('/:bookingId/invoice.pdf', 'INVOICE');
+documentRoute("/:bookingId/ticket.pdf", "TICKET");
+documentRoute("/:bookingId/invoice.pdf", "INVOICE");

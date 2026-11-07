@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, validate } from '../middleware/index.js';
 import { requireAuth, requireRole, assertLiveRole } from '../middleware/auth.js';
 import { query, queryOne } from '../db/pool.js';
+import * as offers from '../services/offers.service.js';
 
 export const adminRouter = Router();
 
@@ -12,6 +13,14 @@ adminRouter.use(requireAuth, requireRole('ADMIN'), assertLiveRole);
 
 const uuid = z.string().uuid();
 const money = z.number().nonnegative().max(10_000_000);
+
+/*
+ * Coupons and campaigns are the only admin resources keyed by SERIAL, not UUID
+ * (see 0005_offers.sql) — every other table uses gen_random_uuid(). Validating
+ * their :id with the shared `uuid` schema rejected every toggle with a 422
+ * before the handler ever ran. Coerced because path params arrive as strings.
+ */
+const serialId = z.coerce.number().int().positive();
 
 /** Dashboard tiles: users, revenue, today's departures, upcoming payments. */
 adminRouter.get(
@@ -42,6 +51,37 @@ adminRouter.get(
     );
 
     res.json({ totals: row, daily });
+  })
+);
+
+adminRouter.get(
+  '/tours',
+  asyncHandler(async (req, res) => {
+    // Admins get everything, including unpublished drafts, sorted newest first.
+    // We use the same rich selection as the public list (teaser, cover_url, ratings)
+    // plus admin-specific fields like total_seats and is_published.
+    const { rows } = await query(
+      `SELECT t.id,
+              t.title,
+              t.slug,
+              t.tour_type,
+              t.base_price,
+              t.total_seats,
+              t.duration_days,
+              t.duration_nights,
+              t.is_published,
+              t.created_at,
+              LEFT(t.overview, 180)                       AS teaser,
+              t.gallery -> 0 ->> 'url'                    AS cover_url,
+              ROUND(AVG(r.rating)::numeric, 1)            AS avg_rating,
+              COUNT(r.id)::int                            AS review_count
+         FROM tours t
+         LEFT JOIN reviews r ON r.tour_id = t.id
+        GROUP BY t.id
+        ORDER BY t.created_at DESC`
+    );
+
+    res.json({ items: rows });
   })
 );
 
@@ -90,6 +130,26 @@ adminRouter.post(
     res.status(201).json({ tour });
   })
 );
+adminRouter.delete(
+  '/tours/:tourId',
+  validate('params', z.object({ tourId: uuid })),
+  asyncHandler(async (req, res) => {
+    // Delete the tour and return its ID to confirm it existed
+    const deletedTour = await queryOne(
+      `DELETE FROM tours WHERE id = $1 RETURNING id`,
+      [req.params.tourId]
+    );
+
+    if (!deletedTour) {
+      return res.status(404).json({ 
+        error: { code: 'NOT_FOUND', message: 'Tour not found' } 
+      });
+    }
+
+    res.status(204).end();
+  })
+);
+
 
 /** Seat management: open dates in bulk and set capacity per date. */
 adminRouter.post(
@@ -174,6 +234,71 @@ adminRouter.patch(
   })
 );
 
+/** Edit an existing tour (TourBuilder's save-when-editing flow). */
+adminRouter.patch(
+  '/tours/:tourId',
+  validate('params', z.object({ tourId: uuid })),
+  validate(
+    'body',
+    z.object({
+      title: z.string().min(3).max(200).optional(),
+      slug: z.string().regex(/^[a-z0-9-]+$/).max(140).optional(),
+      overview: z.string().min(10).optional(),
+      tourType: z.string().max(40).optional(),
+      basePrice: money.optional(),
+      totalSeats: z.number().int().min(1).max(500).optional(),
+      durationDays: z.number().int().min(1).max(60).optional(),
+      durationNights: z.number().int().min(0).max(60).optional(),
+      itinerary: z.array(z.record(z.unknown())).optional(),
+      inclusions: z.array(z.string()).optional(),
+      exclusions: z.array(z.string()).optional(),
+      options: z.record(z.record(z.unknown())).optional(),
+      gallery: z.array(z.object({ url: z.string().url(), alt: z.string().optional() })).optional(),
+      refundPolicy: z
+        .array(z.object({ daysBefore: z.number().int(), refundPercent: z.number().min(0).max(100) }))
+        .optional(),
+      isPublished: z.boolean().optional(),
+    })
+  ),
+  asyncHandler(async (req, res) => {
+    const b = req.body;
+    const sets = [];
+    const vals = [req.params.tourId];
+    let i = 2;
+
+    if (b.title !== undefined)          { sets.push(`title = $${i++}`);           vals.push(b.title); }
+    if (b.slug !== undefined)           { sets.push(`slug = $${i++}`);            vals.push(b.slug); }
+    if (b.overview !== undefined)       { sets.push(`overview = $${i++}`);        vals.push(b.overview); }
+    if (b.tourType !== undefined)       { sets.push(`tour_type = $${i++}`);       vals.push(b.tourType); }
+    if (b.basePrice !== undefined)      { sets.push(`base_price = $${i++}`);      vals.push(b.basePrice); }
+    if (b.totalSeats !== undefined)     { sets.push(`total_seats = $${i++}`);     vals.push(b.totalSeats); }
+    if (b.durationDays !== undefined)   { sets.push(`duration_days = $${i++}`);   vals.push(b.durationDays); }
+    if (b.durationNights !== undefined) { sets.push(`duration_nights = $${i++}`); vals.push(b.durationNights); }
+    if (b.itinerary !== undefined)      { sets.push(`itinerary = $${i++}::jsonb`);      vals.push(JSON.stringify(b.itinerary)); }
+    if (b.inclusions !== undefined)     { sets.push(`inclusions = $${i++}::jsonb`);     vals.push(JSON.stringify(b.inclusions)); }
+    if (b.exclusions !== undefined)     { sets.push(`exclusions = $${i++}::jsonb`);     vals.push(JSON.stringify(b.exclusions)); }
+    if (b.options !== undefined)        { sets.push(`options = $${i++}::jsonb`);        vals.push(JSON.stringify(b.options)); }
+    if (b.gallery !== undefined)        { sets.push(`gallery = $${i++}::jsonb`);        vals.push(JSON.stringify(b.gallery)); }
+    if (b.refundPolicy !== undefined)   { sets.push(`refund_policy = $${i++}::jsonb`);  vals.push(JSON.stringify(b.refundPolicy)); }
+    if (b.isPublished !== undefined)    { sets.push(`is_published = $${i++}`);          vals.push(b.isPublished); }
+
+    if (sets.length === 0) {
+      return res.status(400).json({ error: { code: 'NO_FIELDS', message: 'No fields to update' } });
+    }
+
+    const tour = await queryOne(
+      `UPDATE tours SET ${sets.join(', ')}
+       WHERE id = $1
+       RETURNING id, slug, title, is_published`,
+      vals
+    );
+    if (!tour) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Tour not found' } });
+    }
+    res.json({ tour });
+  })
+);
+
 /** Map pin management. */
 adminRouter.post(
   '/attractions',
@@ -207,5 +332,159 @@ adminRouter.post(
       ]
     );
     res.status(201).json({ attraction });
+  })
+);
+
+/** Guide list (for the assignment dropdown). */
+adminRouter.get(
+  '/guides',
+  asyncHandler(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT id, full_name AS name, email, phone
+         FROM users
+        WHERE role = 'GUIDE'
+        ORDER BY full_name`
+    );
+    res.json({ guides: rows });
+  })
+);
+
+/** Upcoming departures (for guide assignment table). */
+adminRouter.get(
+  '/departures',
+  validate(
+    'query',
+    z.object({
+      days: z.coerce.number().int().min(1).max(365).default(60),
+      onlyUnassigned: z.coerce.boolean().default(false),
+    })
+  ),
+  asyncHandler(async (req, res) => {
+    const { days, onlyUnassigned } = req.query;
+    const { rows } = await query(
+      `SELECT s.id AS slot_id,
+              t.title AS tour_title,
+              s.slot_date::text AS date,
+              s.total_seats,
+              s.guide_id,
+              COALESCE(SUM(b.seat_count) FILTER (WHERE b.status = 'CONFIRMED'), 0)::int AS sold_seats
+         FROM tour_slots s
+         JOIN tours t ON t.id = s.tour_id
+         LEFT JOIN bookings b ON b.slot_id = s.id
+        WHERE s.slot_date BETWEEN CURRENT_DATE AND CURRENT_DATE + $1::int
+          AND ($2 = FALSE OR s.guide_id IS NULL)
+        GROUP BY s.id, t.title
+        ORDER BY s.slot_date`,
+      [days, onlyUnassigned]
+    );
+
+    res.json({
+      departures: rows.map((r) => ({
+        slotId: r.slot_id,
+        tourTitle: r.tour_title,
+        date: r.date,
+        totalSeats: r.total_seats,
+        availableSeats: r.total_seats - r.sold_seats,
+        guideId: r.guide_id ?? null,
+      })),
+    });
+  })
+);
+
+// ----------------------------------------------------------------- coupons
+
+adminRouter.get(
+  '/coupons',
+  asyncHandler(async (_req, res) => {
+    res.json({ coupons: await offers.listCoupons() });
+  })
+);
+
+adminRouter.post(
+  '/coupons',
+  validate(
+    'body',
+    z.object({
+      code: z.string().min(3).max(40).regex(/^[A-Z0-9]+$/, 'Alphanumeric uppercase only'),
+      discountType: z.enum(['PERCENT', 'FLAT']),
+      discountValue: money,
+      minOrderValue: money.optional(),
+      maxDiscount: money.optional(),
+      usageLimit: z.number().int().min(1).optional(),
+      expiresAt: z.string().datetime().optional(),
+      isActive: z.boolean().default(true),
+    })
+  ),
+  asyncHandler(async (req, res) => {
+    const coupon = await offers.createCoupon(req.body);
+    res.status(201).json({ coupon });
+  })
+);
+
+// Add under the coupons section
+adminRouter.delete(
+  '/coupons/:id',
+  validate('params', z.object({ id: serialId })),
+  asyncHandler(async (req, res) => {
+    await offers.deleteCoupon(req.params.id);
+    res.status(204).end();
+  })
+);
+
+adminRouter.patch(
+  '/coupons/:id',
+  validate('params', z.object({ id: serialId })),
+  validate('body', z.object({ isActive: z.boolean() })),
+  asyncHandler(async (req, res) => {
+    const coupon = await offers.setCouponActive(req.params.id, req.body.isActive);
+    res.json({ coupon }); 
+  })
+);
+
+// --------------------------------------------------------------- campaigns
+
+adminRouter.get(
+  '/campaigns',
+  asyncHandler(async (_req, res) => {
+    res.json({ campaigns: await offers.listCampaigns() });
+  })
+);
+
+adminRouter.post(
+  '/campaigns',
+  validate(
+    'body',
+    z.object({
+      name: z.string().min(2).max(120),
+      discountPercent: z.number().min(1).max(90),
+      bannerUrl: z.string().url().optional(),
+      startsAt: z.string().datetime().optional(),
+      endsAt: z.string().datetime().optional(),
+      isActive: z.boolean().default(true),
+    })
+  ),
+  asyncHandler(async (req, res) => {
+    const campaign = await offers.createCampaign(req.body);
+    res.status(201).json({ campaign });
+  })
+);
+
+adminRouter.patch(
+  '/campaigns/:id',
+  validate('params', z.object({ id: serialId })),
+  validate('body', z.object({ isActive: z.boolean() })),
+  asyncHandler(async (req, res) => {
+    const campaign = await offers.setCampaignActive(req.params.id, req.body.isActive);
+    res.json({ campaign });
+  })
+);
+
+// Add under the campaigns section
+adminRouter.delete(
+  '/campaigns/:id',
+  validate('params', z.object({ id: serialId })),
+  asyncHandler(async (req, res) => {
+    await offers.deleteCampaign(req.params.id);
+    res.status(204).end();
   })
 );

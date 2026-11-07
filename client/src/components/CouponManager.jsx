@@ -55,6 +55,11 @@ export default function CouponManager() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['coupons'] }),
   });
 
+  const drop = useMutation({
+    mutationFn: (id) => api.deleteCoupon(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['coupons'] }),
+  });
+
   const set = (key, cast = (v) => v) => (e) =>
     setForm((f) => ({ ...f, [key]: cast(e.target.type === 'checkbox' ? e.target.checked : e.target.value) }));
 
@@ -63,17 +68,25 @@ export default function CouponManager() {
 
   function submit(e) {
     e.preventDefault();
-    create.mutate({
+    const body = {
       code: form.code.trim().toUpperCase(),
       discountType: form.discountType,
       discountValue: Number(form.value),
-      minOrderValue: form.minOrderValue === '' ? 0 : Number(form.minOrderValue),
-      maxDiscount: isPercent && form.maxDiscount !== '' ? Number(form.maxDiscount) : null,
-      usageLimit: form.usageLimit === '' ? null : Number(form.usageLimit),
-      expiresAt: form.expiresAt || null,
       isActive: form.isActive,
-    });
+    };
+    // Only include optional fields when they have a value
+    if (form.minOrderValue !== '') body.minOrderValue = Number(form.minOrderValue);
+    if (isPercent && form.maxDiscount !== '') body.maxDiscount = Number(form.maxDiscount);
+    if (form.usageLimit !== '') body.usageLimit = Number(form.usageLimit);
+    if (form.expiresAt) body.expiresAt = new Date(form.expiresAt).toISOString();
+    create.mutate(body);
   }
+
+  const handleDelete = (id, code) => {
+    if (window.confirm(`Are you sure you want to delete the coupon "${code}"?\n\nThis cannot be undone.`)) {
+      drop.mutate(id);
+    }
+  };
 
   return (
     <section className="card p-4">
@@ -128,7 +141,8 @@ export default function CouponManager() {
         </button>
       </form>
 
-      <ErrorNote error={toggle.error} />
+      {/* Show toggle or drop errors */}
+      <ErrorNote error={toggle.error || drop.error} />
 
       <div className="mt-5">
         {list.isPending ? (
@@ -140,7 +154,14 @@ export default function CouponManager() {
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {coupons.map((c) => (
-              <CouponCard key={c.id} coupon={c} onToggle={() => toggle.mutate({ id: c.id, isActive: !c.isActive })} busy={toggle.isPending && toggle.variables?.id === c.id} />
+              <CouponCard 
+                key={c.id} 
+                coupon={c} 
+                onToggle={() => toggle.mutate({ id: c.id, isActive: !c.isActive })} 
+                toggleBusy={toggle.isPending && toggle.variables?.id === c.id}
+                onDelete={() => handleDelete(c.id, c.code)}
+                deleteBusy={drop.isPending && drop.variables === c.id}
+              />
             ))}
           </ul>
         )}
@@ -149,7 +170,7 @@ export default function CouponManager() {
   );
 }
 
-function CouponCard({ coupon, onToggle, busy }) {
+function CouponCard({ coupon, onToggle, toggleBusy, onDelete, deleteBusy }) {
   const isPercent = coupon.discountType === 'PERCENT';
   const headline = isPercent ? `${Number(coupon.discountValue)}% off` : `${inr(coupon.discountValue)} off`;
   const expired = coupon.expiresAt && new Date(coupon.expiresAt) < new Date();
@@ -164,7 +185,7 @@ function CouponCard({ coupon, onToggle, busy }) {
         <button
           type="button"
           onClick={onToggle}
-          disabled={busy}
+          disabled={toggleBusy || deleteBusy}
           aria-pressed={coupon.isActive}
           className={[
             'chip shrink-0',
@@ -173,11 +194,11 @@ function CouponCard({ coupon, onToggle, busy }) {
               : 'bg-sand-100 text-sand-500 dark:bg-ink-800 dark:text-sand-400',
           ].join(' ')}
         >
-          {busy ? '…' : coupon.isActive ? 'Active' : 'Paused'}
+          {toggleBusy ? '…' : coupon.isActive ? 'Active' : 'Paused'}
         </button>
       </div>
 
-      <dl className="faint mt-2 space-y-0.5 text-xs">
+      <dl className="faint mt-2 flex-1 space-y-0.5 text-xs">
         {Number(coupon.minOrderValue) > 0 && <div>Min order {inr(coupon.minOrderValue)}</div>}
         {isPercent && coupon.maxDiscount != null && <div>Capped at {inr(coupon.maxDiscount)}</div>}
         <div>
@@ -191,6 +212,17 @@ function CouponCard({ coupon, onToggle, busy }) {
             : 'No expiry'}
         </div>
       </dl>
+
+      <div className="mt-3 flex justify-end border-t border-sand-100 pt-2 dark:border-ink-700/50">
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={deleteBusy || toggleBusy}
+          className="text-xs font-semibold text-red-600 transition-colors hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
+        >
+          {deleteBusy ? 'Deleting…' : 'Delete'}
+        </button>
+      </div>
     </li>
   );
 }

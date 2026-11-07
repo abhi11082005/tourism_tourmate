@@ -48,8 +48,8 @@ services:
 
   osrm:
     profiles: ['routing']
-    image: ghcr.io/project-osrm/osrm-backend
-    command: osrm-routed --algorithm mld /data/northern-zone-latest.osrm
+    image: osrm/osrm-backend
+    command: osrm-routed --algorithm mld /data/planet_77.085_29.592_a753feca.osrm
     volumes:
       - ./osrm:/data
     ports: ['5000:5000']
