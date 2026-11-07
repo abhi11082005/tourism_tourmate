@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { NavLink, Outlet, Link } from 'react-router-dom';
+import { NavLink, Outlet, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
@@ -46,8 +46,13 @@ export default function Layout() {
 
   const tabs = isGuest ? GUEST_TABS : [...GUEST_TABS, DASHBOARD_TAB];
 
+  // Explore is a full-bleed map: no max-width column, no page scroll. The shell then
+  // becomes a fixed-height column (header, banner, map) and the page fills the rest.
+  const { pathname } = useLocation();
+  const immersive = pathname === '/explore';
+
   return (
-    <div className="flex min-h-dvh flex-col ">
+    <div className={`flex flex-col ${immersive ? 'h-dvh overflow-hidden' : 'min-h-dvh'}`}>
       <header
         className="sticky top-0 z-20 border-b border-sand-100 bg-sand-50/95 backdrop-blur
                    dark:border-ink-700 dark:bg-ink-900"
@@ -92,7 +97,13 @@ export default function Layout() {
       {/* Only renders when the browser refused a location and no city is saved. */}
       <LocationBanner />
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-24 pt-4 md:pb-10">
+      <main
+        className={
+          immersive
+            ? 'relative min-h-0 w-full flex-1'
+            : 'mx-auto w-full max-w-6xl flex-1 px-4 pb-24 pt-4 md:pb-10'
+        }
+      >
         <Outlet />
       </main>
 
