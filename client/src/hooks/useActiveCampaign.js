@@ -1,19 +1,28 @@
-import { useCallback, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api.js';
+import { MAX_TIMEOUT_MS, campaignState, computeDeal, nextBoundary } from '../lib/campaign.js';
 
 /*
  * Live festival campaigns for guest mode.
  *
- * One public query feeds two surfaces: the homepage banner and the strike-through
- * prices on every tour card. It is deliberately allowed to fail quietly — if the
- * campaigns endpoint is missing or down, the banner simply doesn't render and cards
- * show their normal price. `retry: false` keeps a missing route from spamming the
- * network tab; the offer engine is a nice-to-have, not load-bearing for browsing.
+ * One public query feeds every sale surface: the homepage hero, the announcement bar
+ * and the strike-through prices on cards, the tour page and the compare table. It is
+ * deliberately allowed to fail quietly — if the campaigns endpoint is missing or
+ * down, nothing sale-related renders and prices show normally. `retry: false` keeps a
+ * missing route from spamming the network tab.
  *
- * The percentage here drives a *display-only* "from" price. Money stays
- * server-authoritative: the real total is re-derived by the quote and checkout
- * calls, so this arithmetic never decides what a traveller is charged.
+ * Two things this hook does that the raw response doesn't:
+ *
+ *  1. It re-checks each campaign's start/end window against the clock. The response
+ *     is cached for minutes, so without this a sale that ended while the tab was open
+ *     would keep advertising a discount the server will now refuse at checkout.
+ *     A single timer wakes the hook at the next start/end boundary, re-filters, and
+ *     asks the server for a fresh list.
+ *
+ *  2. All discount arithmetic goes through computeDeal (lib/campaign.js), which
+ *     mirrors the server's own rounding. The figures here are still display-only:
+ *     the quote and checkout calls re-derive the real total on the server.
  */
 
 const num = (v) => {
@@ -22,6 +31,7 @@ const num = (v) => {
 };
 
 export function useActiveCampaign() {
+  const qc = useQueryClient();
   const { data, isPending, isError } = useQuery({
     queryKey: ['campaigns', 'active'],
     queryFn: ({ signal }) => api.activeCampaigns(signal),
@@ -30,16 +40,35 @@ export function useActiveCampaign() {
     refetchOnWindowFocus: false,
   });
 
-  // Accept either { campaigns: [...] } or a bare array, and keep only the ones the
-  // server marked live with a usable discount.
-  const campaigns = useMemo(() => {
+  const [now, setNow] = useState(() => Date.now());
+
+  // Accept either { campaigns: [...] } or a bare array; keep usable discounts only.
+  const parsed = useMemo(() => {
     const raw = Array.isArray(data) ? data : (data?.campaigns ?? []);
     return raw
       .map((c) => ({ ...c, discountPercent: num(c.discountPercent) }))
-      .filter((c) => c.isActive !== false && c.discountPercent > 0);
+      .filter((c) => c.discountPercent > 0);
   }, [data]);
 
-  // The banner shows one headline offer: the deepest active discount wins.
+  // Only campaigns whose window is open right now (and that aren't paused).
+  const campaigns = useMemo(
+    () => parsed.filter((c) => campaignState(c, now) === 'live'),
+    [parsed, now]
+  );
+
+  // Wake at the next start/end boundary: re-filter locally, then refresh from the server.
+  useEffect(() => {
+    const next = nextBoundary(parsed, now);
+    if (next == null) return undefined;
+    const delay = Math.min(Math.max(next - Date.now(), 0) + 250, MAX_TIMEOUT_MS);
+    const id = setTimeout(() => {
+      setNow(Date.now());
+      qc.invalidateQueries({ queryKey: ['campaigns', 'active'] });
+    }, delay);
+    return () => clearTimeout(id);
+  }, [parsed, now, qc]);
+
+  // One headline offer, and the one every card uses: the deepest live discount wins.
   const primary = useMemo(
     () =>
       campaigns.reduce(
@@ -50,22 +79,22 @@ export function useActiveCampaign() {
   );
 
   /*
-   * Card helper. Given a base price string from the API, returns the pieces a
-   * TourCard needs to strike through the old price, or null when there is no live
-   * offer — so the card can render `discount && <s>…</s>` without any math itself.
+   * Card helper. Given a base price from the API, returns everything a surface needs
+   * to show the offer — or null when there is no live offer, so callers can render
+   * `discount && …` without doing any math themselves.
    */
   const discountFor = useCallback(
     (basePrice) => {
       if (!primary) return null;
-      const original = num(basePrice);
-      if (original <= 0) return null;
-      const discounted = Math.round(original * (1 - primary.discountPercent / 100));
-      if (discounted >= original) return null;
+      const deal = computeDeal(basePrice, primary.discountPercent);
+      if (!deal) return null;
       return {
         percent: primary.discountPercent,
-        original,
-        discounted,
+        original: deal.original,
+        discounted: deal.discounted,
+        saved: deal.saved,
         label: primary.name ?? 'Festival offer',
+        endsAt: primary.endsAt ?? null,
         campaign: primary,
       };
     },

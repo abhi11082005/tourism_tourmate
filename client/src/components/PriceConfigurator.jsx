@@ -67,8 +67,10 @@ export default function PriceConfigurator({
   const baseTotal = data?.totalAmount ?? 0;
   
   // Extract the campaign discount based on the percent value provided in the campaign data[cite: 1]
-  const campaignDiscountAmount = discountCampaign?.percent 
-    ? (baseTotal * discountCampaign.percent) / 100 
+  // Floored, exactly like startCheckout on the server, so the total shown here is the
+  // total the server will hold (it used to be unrounded, which could differ by < ₹1).
+  const campaignDiscountAmount = discountCampaign?.percent
+    ? Math.floor((Number(baseTotal) * Number(discountCampaign.percent)) / 100)
     : 0;
 
   const totalDiscountAmount = couponAmount + campaignDiscountAmount;

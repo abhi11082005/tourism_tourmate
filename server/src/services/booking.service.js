@@ -100,8 +100,8 @@ export async function startCheckout({ userId, slotId, seatCount, selectedOptions
     campaign = await queryOne(
       `SELECT id, name, discount_percent 
          FROM campaigns 
-        WHERE id = $1 AND is_active = true 
-          AND starts_at <= NOW() 
+        WHERE id = $1 AND is_active = true
+          AND (starts_at IS NULL OR starts_at <= NOW())
           AND (ends_at IS NULL OR ends_at > NOW())`,
       [campaignId]
     );

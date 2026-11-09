@@ -19,6 +19,7 @@ import BottomSheet from '../components/tour/BottomSheet.jsx';
 import MobileBookingBar from '../components/tour/MobileBookingBar.jsx';
 import MobileAssistant from '../components/tour/MobileAssistant.jsx';
 import { useMediaQuery } from '../hooks/useMediaQuery.js';
+import { useActiveCampaign } from '../hooks/useActiveCampaign.js';
 import { useScrollSpy, useStickyHeaderHeight } from '../hooks/useScrollSpy.js';
 
 /*
@@ -89,7 +90,21 @@ export default function TourDetail() {
   const initialSelection = useMemo(() => defaultSelection(tour?.options), [tour?.options]);
   const effectiveSelection = Object.keys(selected).length ? selected : initialSelection;
 
-  const discountCampaign = location.state?.discount || null; // Discount campaign handed over via router state
+  /*
+   * The campaign for this tour. The live campaign list is the source of truth, so a
+   * visitor who opens this URL directly (a shared link, a refresh) gets the same sale
+   * price as one who clicked through from a card — before, only the router state
+   * carried it and a deep link silently booked at full price. While the list is still
+   * loading (or if it failed) the card's router state is used, so a click-through
+   * never flashes a full price. A campaign that has since ended is not in the live
+   * list, so a stale state can't send an expired campaignId to checkout.
+   */
+  const liveCampaign = useActiveCampaign();
+  const stateDiscount = location.state?.discount || null;
+  const discountCampaign =
+    liveCampaign.isPending || liveCampaign.isError
+      ? stateDiscount
+      : (tour ? liveCampaign.discountFor(tour.base_price) : null);
 
   // 1. Fetch the wishlist to derive `isSaved` status
   const { data: wishlistData } = useQuery({

@@ -1,7 +1,9 @@
 // frontend/src/pages/Home.jsx
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api.js';
+import { DEALS_ANCHOR } from '../lib/campaign.js';
 import TourCard from '../components/TourCard.jsx';
 import TourCardSkeleton from '../components/TourCardSkeleton.jsx';
 import LoadMoreTours from '../components/LoadMoreTours.jsx';
@@ -46,12 +48,25 @@ export default function Home() {
 
   const geo = useGeolocation();
   const { user } = useAuth();
-  const { discountFor } = useActiveCampaign();
+  const { discountFor, primary } = useActiveCampaign();
+  const { hash } = useLocation();
 
   useEffect(() => {
     const id = setTimeout(() => setDebouncedQ(q.trim()), 300);
     return () => clearTimeout(id);
   }, [q]);
+
+  // "/#deals" (the announcement bar's CTA on other pages) lands on the tour grid.
+  useEffect(() => {
+    if (hash !== `#${DEALS_ANCHOR}`) return undefined;
+    const id = setTimeout(() => {
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      document
+        .getElementById(DEALS_ANCHOR)
+        ?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    }, 60);
+    return () => clearTimeout(id);
+  }, [hash]);
 
   // Progressive (6-at-a-time) tour list. Uses the debounced search term, so
   // typing doesn't fire a request per keystroke; q/sort changes restart at offset 0.
@@ -86,7 +101,7 @@ export default function Home() {
   return (
     // Extra bottom space while the compare bar is showing so it never covers content.
     <div className={`space-y-10 ${compare.selected.length > 0 ? 'pb-28' : ''}`}>
-      <FestivalBanner />
+      <FestivalBanner tours={pkg.items} />
 
       <section className="rounded-3xl bg-ink-800 px-5 py-8 text-sand-50 md:px-8 md:py-12">
         <h1 className="text-2xl font-black leading-tight md:text-4xl">
@@ -333,7 +348,7 @@ export default function Home() {
       <RecentlyViewedTours discountFor={discountFor} />
 
       {/* Packages Section */}
-      <section aria-labelledby="packages-heading">
+      <section id={DEALS_ANCHOR} aria-labelledby="packages-heading" className="scroll-mt-24">
         <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
           <div className="max-w-2xl">
             <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sand-500 dark:text-sand-400">
@@ -352,6 +367,11 @@ export default function Home() {
           </div>
  
           <div className="flex items-center gap-3">
+            {primary && (
+              <span className="chip border-glow/50 bg-glow/10 font-semibold dark:text-sand-50">
+                {primary.discountPercent}% off every tour
+              </span>
+            )}
             {pkg.data && (
               <span className="chip dark:text-sand-100" aria-live="polite">
                 {pkg.total} {pkg.total === 1 ? 'tour' : 'tours'}

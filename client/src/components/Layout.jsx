@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
 import AccountMenu from './AccountMenu.jsx';
 import LocationBanner from './LocationBanner.jsx';
+import SaleAnnouncementBar from './sale/SaleAnnouncementBar.jsx';
 
 /*
  * Mobile-first shell: a bottom tab bar on phones (thumb reach), a top bar from
@@ -46,6 +47,10 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-dvh flex-col">
+      {/* Live sale strip: renders nothing when there is no live campaign, and stays out
+          of the homepage (hero), checkout and admin. */}
+      <SaleAnnouncementBar />
+
       <header
         className="sticky top-0 z-20 border-b border-sand-100 bg-sand-50/95 backdrop-blur
                    dark:border-ink-700 dark:bg-ink-900"

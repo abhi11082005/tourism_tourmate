@@ -92,10 +92,10 @@ const tours = useQuery({
         <MapPinManager />
       </Suspense>
 
-      <div className="grid gap-8 xl:grid-cols-2">
-        <CouponManager />
-        <CampaignManager />
-      </div>
+      <CouponManager />
+
+      {/* Full width: the campaign form sits beside a live storefront preview. */}
+      <CampaignManager />
     </div>
   );
 }
