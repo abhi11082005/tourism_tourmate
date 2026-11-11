@@ -6,3 +6,5 @@ RUN apt-get update \
        postgresql-16-postgis-3 \
        postgresql-16-postgis-3-scripts \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PGDATA=/var/lib/postgresql/data/pgdata
