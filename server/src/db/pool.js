@@ -13,7 +13,7 @@ export const pool = new pg.Pool({
   max: env.PGPOOL_MAX,
   idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
   connectionTimeoutMillis: 5_000,
-  ssl: isProd ? { rejectUnauthorized: false } : false,
+  ssl: false,
 });
 
 
