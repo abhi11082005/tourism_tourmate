@@ -15,7 +15,7 @@ import pg from 'pg';
 import { env } from '../src/config/env.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, '../../db/migrations');
+const MIGRATIONS_DIR = path.resolve(__dirname, '../db/migrations');
 
 const includeSeed = process.argv.includes('--include-seed');
 const dryRun = process.argv.includes('--dry-run');
