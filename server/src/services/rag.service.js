@@ -50,31 +50,56 @@ export async function embed(text) {
   return vector;
 }
 
+
 async function embedViaProvider(text) {
-  // Swap this for your embeddings endpoint (Ollama nomic-embed-text locally,
-  // or any OpenAI-compatible /embeddings route). Dimension must match the column.
-  const res = await fetch(`${process.env.EMBEDDING_URL ?? 'http://localhost:11434/api/embeddings'}`, {
+  const embeddingUrl =
+    process.env.EMBEDDING_URL ??
+    'http://localhost:11434/api/embeddings';
+
+  const embeddingToken = process.env.EMBEDDING_TOKEN;
+
+  const headers = {
+    'content-type': 'application/json',
+  };
+
+  if (embeddingToken) {
+    headers.authorization = `Bearer ${embeddingToken}`;
+  }
+
+  const res = await fetch(embeddingUrl, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: process.env.EMBEDDING_MODEL ?? 'nomic-embed-text', prompt: text }),
+    headers,
+    body: JSON.stringify({
+      model: process.env.EMBEDDING_MODEL ?? 'nomic-embed-text',
+      prompt: text,
+    }),
   }).catch(() => null);
 
   if (!res?.ok) {
-    throw new HttpError(503, 'The assistant is warming up, try again in a moment', {
-      code: 'EMBEDDING_UNAVAILABLE',
-    });
+    throw new HttpError(
+      503,
+      'The assistant is warming up, try again in a moment',
+      { code: 'EMBEDDING_UNAVAILABLE' }
+    );
   }
+
   const body = await res.json();
   const vector = body.embedding ?? body.data?.[0]?.embedding;
-  if (!Array.isArray(vector)) throw new HttpError(503, 'Embedding response was malformed');
+
+  if (!Array.isArray(vector)) {
+    throw new HttpError(503, 'Embedding response was malformed');
+  }
+
   if (vector.length !== env.EMBEDDING_DIM) {
     throw new HttpError(
       500,
       `Embedding dimension ${vector.length} does not match the vector(${env.EMBEDDING_DIM}) column`
     );
   }
+
   return vector;
 }
+
 
 /** pgvector literal: '[0.1,0.2,...]'. Passed as a bound parameter, never inlined. */
 const toVectorLiteral = (v) => `[${v.join(',')}]`;
