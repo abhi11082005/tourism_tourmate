@@ -73,8 +73,13 @@ export default function Login() {
 
   // Bypasses the form completely to avoid accidental form submissions
   const handleGoogleAuth = () => {
-    window.location.href = `/api/auth/google?redirect=${encodeURIComponent(destination)}`;
-  };
+  const API_BASE = (
+    import.meta.env.VITE_API_BASE_URL || '/api'
+  ).replace(/\/$/, '');
+
+  window.location.href =
+    `${API_BASE}/auth/google?redirect=${encodeURIComponent(destination)}`;
+};
 
   return (
     <div className="mx-auto max-w-sm space-y-4 py-6">
