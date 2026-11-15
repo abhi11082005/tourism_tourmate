@@ -76,14 +76,6 @@ export default function Login() {
   const API_BASE = (
     import.meta.env.VITE_API_BASE_URL || '/api'
   ).replace(/\/$/, '');
-<<<<<<< HEAD
-=======
-
-  window.location.href =
-    `${API_BASE}/auth/google?redirect=${encodeURIComponent(destination)}`;
-};
->>>>>>> 89355d03315ab5876fa891b5b621d14ab2641bb0
-
   window.location.href =
     `${API_BASE}/auth/google?redirect=${encodeURIComponent(destination)}`;
 };
