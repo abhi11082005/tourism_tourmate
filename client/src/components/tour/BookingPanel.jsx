@@ -16,7 +16,7 @@ import PriceTag from './PriceTag.jsx';
  *                    the home indicator.
  */
 
-function Step({ n, title, children }) {
+function Step({ n, title, children }) { 
   return (
     <section aria-label={title}>
       <p className="mb-2 flex items-center gap-2 text-sm font-bold">

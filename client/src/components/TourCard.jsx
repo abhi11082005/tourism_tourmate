@@ -13,6 +13,7 @@ import {
   ratingOf,
 } from './TourBits.jsx';
 import { inr } from '../lib/format.js';
+import DealPrice from './sale/DealPrice.jsx';
 
 /* ------------------------------------------------------------ small pieces */
 
@@ -74,15 +75,7 @@ function DockButton({ label, tip, onClick, pressed, disabled, busy, active, chil
 
 /* Same data as TourPrice, styled for white-on-photo. Display only. */
 function OverlayPrice({ tour, discount }) {
-  if (discount) {
-    return (
-      <p className="min-w-0 leading-tight">
-        <span className="text-xl font-bold">{inr(discount.discounted)}</span>
-        <span className="text-xs text-white/70"> /seat</span>{' '}
-        <s className="text-xs text-white/60">{inr(discount.original)}</s>
-      </p>
-    );
-  }
+  if (discount) return <DealPrice deal={discount} />;
   return (
     <p className="min-w-0 leading-tight">
       <span className="block text-[10px] font-medium uppercase tracking-wider text-white/60">From</span>
@@ -291,9 +284,16 @@ function TourCard({
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-wrap items-start justify-between gap-2 p-3 sm:p-4">
         <div className="flex flex-col items-start gap-2">
           {discount && (
-            <span className="rounded-full bg-glow px-2.5 py-1 text-[11px] font-bold text-ink-900 shadow-md">
-              {discount.percent}% off · {discount.label}
-            </span>
+            <>
+              <span className="rounded-full bg-glow px-3 py-1 text-xs font-black tracking-wide text-ink-900 shadow-lg">
+                {discount.percent}% OFF
+              </span>
+              {/* The campaign name is a quiet second line, tablet and up: on a phone the
+                  badge + the four controls already fill the row. */}
+              <span className="hidden max-w-[12rem] truncate rounded-full bg-black/35 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white/90 backdrop-blur-md sm:inline-block">
+                {discount.label}
+              </span>
+            </>
           )}
         </div>
 
@@ -368,8 +368,16 @@ function TourCard({
           </Link>
         </h3>
 
+        {/* One teaser line on a sale card: the savings line needs the room, and the card
+            keeps its fixed ratio so nothing around it moves. */}
         {tour.teaser && (
-          <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-white/80">{tour.teaser}</p>
+          <p
+            className={`mt-2 text-sm leading-relaxed text-white/80 ${
+              discount ? 'line-clamp-1' : 'line-clamp-2'
+            }`}
+          >
+            {tour.teaser}
+          </p>
         )}
 
         <div className="mt-3 flex items-center justify-between gap-2 text-sm text-white/90">
@@ -454,11 +462,20 @@ function TourCard({
           <Link
             to={`/tours/${tour.slug}`}
             state={{ discount }}
-            aria-label={`Explore trip: ${tour.title}`}
-            title="Explore trip"
-            className="group/cta pointer-events-auto grid h-12 w-12 shrink-0 place-items-center rounded-full bg-white text-ink-900 shadow-lg transition duration-300 hover:bg-sand-100 motion-safe:hover:scale-110 motion-safe:active:scale-95"
+            aria-label={discount ? `Book now: ${tour.title}` : `Explore trip: ${tour.title}`}
+            title={discount ? 'Book now' : 'Explore trip'}
+            className={`group/cta pointer-events-auto shrink-0 bg-white text-ink-900 shadow-lg transition duration-300 motion-safe:active:scale-95 ${
+              discount
+                ? 'inline-flex h-12 items-center gap-2 rounded-full pl-5 pr-4 text-sm font-bold hover:bg-glow motion-safe:hover:scale-105'
+                : 'grid h-12 w-12 place-items-center rounded-full hover:bg-sand-100 motion-safe:hover:scale-110'
+            }`}
           >
-            <ArrowIcon className="h-5 w-5 transition-transform duration-300 group-hover/cta:translate-x-0.5" />
+            {discount && <span>Book now</span>}
+            <ArrowIcon
+              className={`transition-transform duration-300 group-hover/cta:translate-x-0.5 ${
+                discount ? 'h-4 w-4' : 'h-5 w-5'
+              }`}
+            />
           </Link>
         </div>
       </div>

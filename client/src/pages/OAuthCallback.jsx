@@ -7,7 +7,7 @@ export default function OAuthCallback() {
   useEffect(() => {
     const token = searchParams.get('token');
     const redirectUrl = searchParams.get('redirect') || '/';
-
+ 
     if (token) {
       // 1. Save the token to localStorage
       localStorage.setItem('tourmate.token', token);

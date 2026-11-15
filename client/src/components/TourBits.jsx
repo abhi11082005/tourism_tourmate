@@ -37,6 +37,9 @@ export function TourPrice({ tour, discount }) {
         <span className="text-xs text-sand-500 line-through dark:text-sand-400">
           {inr(discount.original)}
         </span>
+        <span className="block text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
+          You save {inr(discount.saved ?? discount.original - discount.discounted)}
+        </span>
         <span className="block text-[11px] font-semibold text-glow">
           {discount.percent}% off · {discount.label}
         </span>
