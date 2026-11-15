@@ -74,7 +74,14 @@ export const paymentsEnabled = Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_S
 
 // `rzp_test_*` keys move no real money. Shipping them to production means every
 // booking looks paid while nothing is ever settled, so refuse to boot instead.
-if (isProd && env.RAZORPAY_KEY_ID?.startsWith('rzp_test_')) {
+const allowTestPaymentsInProduction =
+  process.env.ALLOW_TEST_PAYMENTS_IN_PRODUCTION === 'true';
+
+if (
+  isProd &&
+  env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') &&
+  !allowTestPaymentsInProduction
+) {
   throw new Error('Refusing to boot in production with a Razorpay test key.');
 }
 
