@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@clerk/clerk-sdk-node": "^4.13.23",
+    "@langchain/core": "^1.4.2",
+    "@langchain/langgraph": "^1.7.5",
     "bcrypt": "5.1.1",
     "compression": "1.7.4",
     "cookie-parser": "^1.4.7",
@@ -34,7 +36,7 @@
     "pino-http": "10.2.0",
     "razorpay": "^2.9.8",
     "svix": "^2.3.0",
-    "zod": "3.23.8"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "pino-pretty": "11.2.2"

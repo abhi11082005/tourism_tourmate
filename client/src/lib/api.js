@@ -315,3 +315,128 @@ export async function askExpert({ tourId, question }, { onSources, onToken, sign
     }
   }
 }
+
+/* ----------------------------------------------------------------------------
+ * Central assistant (LangGraph) — POST /assistant/chat.
+ *
+ * The server owns the conversation. The browser only remembers its id, and for a
+ * guest the one-time key the server issued, so a reload continues the same chat.
+ * If the stored conversation no longer belongs to this session (user logged in or
+ * out in between) the server answers 404; we drop it and start a fresh one once.
+ * -------------------------------------------------------------------------- */
+
+const CONVERSATION_KEY = 'tourmate.assistant.conversation';
+
+function readConversation() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONVERSATION_KEY));
+    if (saved && typeof saved.conversationId === 'string') return saved;
+  } catch {
+    /* no stored conversation, or storage unavailable */
+  }
+  return null;
+}
+
+function writeConversation(value) {
+  try {
+    if (value) localStorage.setItem(CONVERSATION_KEY, JSON.stringify(value));
+    else localStorage.removeItem(CONVERSATION_KEY);
+  } catch {
+    /* the chat still works; it just will not survive a reload */
+  }
+}
+
+export const resetAssistantConversation = () => writeConversation(null);
+
+/**
+ * @param {{ message: string, tourId?: string, location?: {lat: number, lng: number} }} payload
+ * @param {{ onIntent?: Function, onTool?: Function, onSources?: Function, onToken: Function, signal?: AbortSignal }} handlers
+ */
+export async function chatAssistant({ message, tourId, location }, handlers = {}) {
+  const { onIntent, onTool, onSources, onToken, signal } = handlers;
+
+  async function attempt(conversation) {
+    const res = await fetch(`${BASE}/assistant/chat`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        message,
+        ...(tourId ? { tourId } : {}),
+        ...(location ? { location } : {}),
+        ...(conversation
+          ? { conversationId: conversation.conversationId, guestKey: conversation.guestKey }
+          : {}),
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      const payload = await res.json().catch(() => null);
+      throw new ApiError(
+        res.status,
+        payload?.error?.code ?? 'ASSISTANT_UNAVAILABLE',
+        payload?.error?.message ?? 'The assistant is unavailable right now'
+      );
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+
+      for (const frame of frames) {
+        const event = frame.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+        const data = frame.match(/^data:\s*(.+)$/m)?.[1];
+        if (!data) continue;
+        let parsed;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue;
+        }
+
+        if (event === 'meta') {
+          // Keep the guest key the server issued; reuse the stored one afterwards.
+          writeConversation({
+            conversationId: parsed.conversationId,
+            ...(parsed.guestKey ?? conversation?.guestKey
+              ? { guestKey: parsed.guestKey ?? conversation.guestKey }
+              : {}),
+          });
+        } else if (event === 'intent') onIntent?.(parsed);
+        else if (event === 'tool') onTool?.(parsed);
+        else if (event === 'sources') onSources?.(parsed);
+        else if (event === 'token') onToken?.(parsed.token);
+        else if (event === 'error') throw new ApiError(502, 'ASSISTANT_STREAM', parsed.message);
+        else if (event === 'done') return;
+      }
+    }
+  }
+
+  const stored = readConversation();
+  try {
+    await attempt(stored);
+  } catch (err) {
+    if (
+      stored &&
+      err instanceof ApiError &&
+      err.status === 404 &&
+      err.message === 'Conversation not found'
+    ) {
+      writeConversation(null);
+      await attempt(null);
+      return;
+    }
+    throw err;
+  }
+}

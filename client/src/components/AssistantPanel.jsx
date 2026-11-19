@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { askExpert } from '../lib/api.js';
+import { chatAssistant } from '../lib/api.js';
 
 /*
  * "Ask the Expert" chat panel.
@@ -68,8 +68,8 @@ export default function AssistantPanel({ tourId, tourTitle }) {
       ]);
 
       try {
-        await askExpert(
-          { tourId, question: trimmed },
+        await chatAssistant(
+          { tourId, message: trimmed },
           {
             signal: controller.signal,
             onSources: (sources) =>
