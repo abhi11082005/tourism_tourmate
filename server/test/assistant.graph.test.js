@@ -51,7 +51,7 @@ function makeDeps(overrides = {}) {
       ]),
       quote: rec('quote', { totalAmount: '2997.00', breakdown: { lines: [] } }),
       getCheckoutState: rec('getCheckoutState', {
-        booking: { reference: 'TM-ABCD1234', tour_title: 'Kashi Heritage Walk', status: 'PENDING', seat_count: 2, total_amount: '1998.00' },
+        booking: { id: 'b-1', reference: 'TM-ABCD1234', tour_title: 'Kashi Heritage Walk', status: 'PENDING', seat_count: 2, total_amount: '1998.00' },
         secondsLeft: 300,
         holdActive: true,
       }),
@@ -303,4 +303,38 @@ test('ui: empty results and failed tools emit no blocks', async () => {
     depsOverrides: { tours: { listTours: async () => { throw new Error('db down'); } } },
   });
   assert.equal(uiBlocks(failed).length, 0);
+});
+
+test('ui: checkout_state block for the signed-in owner carries the booking id and countdown', async () => {
+  const id = '7d1f2c3a-1b2c-4d5e-8f90-123456789abc';
+  const r = await run({
+    question: `status of booking ${id}`,
+    context: { user: { id: 'user-123', role: 'USER' } },
+  });
+  const block = uiBlocks(r).find((b) => b.type === 'checkout_state');
+  assert.deepEqual(block, {
+    type: 'checkout_state',
+    bookingId: 'b-1',
+    reference: 'TM-ABCD1234',
+    tour: 'Kashi Heritage Walk',
+    status: 'PENDING',
+    seats: 2,
+    totalAmount: '1998.00',
+    holdActive: true,
+    secondsLeft: 300,
+  });
+});
+
+test('ui: no checkout_state block for guests or when the service refuses', async () => {
+  const id = '7d1f2c3a-1b2c-4d5e-8f90-123456789abc';
+  const guest = await run({ question: `status of booking ${id}` });
+  assert.equal(uiBlocks(guest).length, 0);
+  const refused = await run({
+    question: `status of booking ${id}`,
+    context: { user: { id: 'someone-else', role: 'USER' } },
+    depsOverrides: {
+      booking: { getCalendar: async () => [], quote: async () => ({}), getCheckoutState: async () => { throw new Error('Not allowed'); } },
+    },
+  });
+  assert.equal(uiBlocks(refused).length, 0);
 });

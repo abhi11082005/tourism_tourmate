@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api } from '../../lib/api.js';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { api, ApiError } from '../../lib/api.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { inr, shortDate } from '../../lib/format.js';
 
 /*
@@ -13,12 +14,25 @@ import { inr, shortDate } from '../../lib/format.js';
  *
  * The first quote arrives with the message, so no request is made until the
  * traveller actually changes something.
+ *
+ * "Hold seats" is the one action here, and it is the traveller's click — never the
+ * model's. It calls the same POST /bookings/checkout the tour page uses (signed-in
+ * only, rate-limited, seats held 10 minutes) and then goes to the existing
+ * /checkout page where payment happens. A hold from here is at the standard price:
+ * coupons and campaigns are priced into the hold on the tour page, so that link
+ * stays right beside it.
  */
 
 const MAX_SEATS = 20;
 
+const cleanSelection = (selected) =>
+  Object.fromEntries(Object.entries(selected).filter(([, v]) => v !== false && v !== ''));
+
 export default function QuoteCard({ block }) {
   const { tourId, slug, options = {}, dates = [] } = block;
+  const { isGuest, status } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [seatCount, setSeatCount] = useState(block.seatCount);
   const [slotId, setSlotId] = useState(block.slotId ?? null);
@@ -27,6 +41,10 @@ export default function QuoteCard({ block }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const touched = useRef(false);
+  const [holding, setHolding] = useState(false);
+  const [holdError, setHoldError] = useState(null);
+  const [soldOut, setSoldOut] = useState(() => new Set()); // slot ids the server said are gone
+  const holdingRef = useRef(false); // synchronous guard: two fast taps must send one request
 
   const chosenDate = dates.find((d) => d.slotId === slotId);
   const seatCap = Math.min(MAX_SEATS, chosenDate?.seatsLeft ?? MAX_SEATS);
@@ -38,9 +56,7 @@ export default function QuoteCard({ block }) {
       setBusy(true);
       setError(null);
       try {
-        const selectedOptions = Object.fromEntries(
-          Object.entries(selected).filter(([, v]) => v !== false && v !== '')
-        );
+        const selectedOptions = cleanSelection(selected);
         const res = await api.quote(
           { tourId, ...(slotId ? { slotId } : {}), seatCount, selectedOptions },
           controller.signal
@@ -66,8 +82,32 @@ export default function QuoteCard({ block }) {
   const pickDate = (d) =>
     change(() => {
       setSlotId(d ? d.slotId : null);
+      setHoldError(null);
       if (d && seatCount > d.seatsLeft) setSeatCount(Math.max(d.seatsLeft, 1));
     });
+
+  async function holdSeats() {
+    if (holdingRef.current || !slotId) return;
+    holdingRef.current = true;
+    setHolding(true);
+    setHoldError(null);
+    try {
+      // Exactly what the quote above was priced with, so the held total is the
+      // total the traveller saw. No coupon, no campaign (see the note up top).
+      const res = await api.checkout({ slotId, seatCount, selectedOptions: cleanSelection(selected) });
+      navigate(`/checkout/${res.bookingId}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // Someone else took the seats first: say so and stop offering that date.
+        setSoldOut((prev) => new Set(prev).add(slotId));
+        setSlotId(null);
+        touched.current = true;
+      }
+      setHoldError(err.message ?? 'Could not hold those seats');
+      holdingRef.current = false;
+      setHolding(false);
+    }
+  }
 
   return (
     <section className="card space-y-3 p-3 text-sm" aria-label="Price estimate">
@@ -83,7 +123,7 @@ export default function QuoteCard({ block }) {
             Any date
           </button>
           {dates.map((d) => {
-            const full = d.seatsLeft < 1;
+            const full = d.seatsLeft < 1 || soldOut.has(d.slotId);
             const active = slotId === d.slotId;
             return (
               <button
@@ -187,10 +227,30 @@ export default function QuoteCard({ block }) {
 
       {error && <p className="notice-error">{error}</p>}
 
-      <Link to={slug ? `/tours/${slug}` : '/explore'} className="btn-primary w-full">
+      {holdError && <p className="notice-error" role="alert">{holdError}</p>}
+
+      {isGuest && status !== 'restoring' ? (
+        <Link to="/login" state={{ from: location }} className="btn-primary w-full">
+          Sign in to hold seats
+        </Link>
+      ) : (
+        <button
+          type="button"
+          className="btn-primary w-full"
+          onClick={holdSeats}
+          disabled={!slotId || holding || busy || status === 'restoring'}
+          aria-busy={holding}
+        >
+          {holding ? 'Holding seats…' : slotId ? 'Hold seats for 10 minutes' : 'Pick a date to hold seats'}
+        </button>
+      )}
+
+      <Link to={slug ? `/tours/${slug}` : '/explore'} className="btn-ghost w-full text-center">
         Continue on the tour page
       </Link>
-      <p className="faint text-center text-[11px]">An estimate only. Seats are not held until you book.</p>
+      <p className="faint text-center text-[11px]">
+        Holding is free and you pay on the next screen. Coupons and offers are applied on the tour page.
+      </p>
     </section>
   );
 }

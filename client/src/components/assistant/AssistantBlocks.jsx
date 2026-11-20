@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { inr, shortDate } from '../../lib/format.js';
+import { inr, mmss, shortDate } from '../../lib/format.js';
 import { durationLabel, ratingOf } from '../TourBits.jsx';
 import QuoteCard from './QuoteCard.jsx';
 
@@ -95,6 +95,32 @@ function Availability({ dates }) {
   );
 }
 
+function CheckoutState({ block }) {
+  const resumable = block.status === 'PENDING' && block.holdActive;
+  return (
+    <section className="card space-y-1 p-3 text-sm" aria-label="Booking status">
+      <p className="font-semibold">{block.tour}</p>
+      <p className="faint text-xs">
+        {block.reference} · {block.seats} seat{block.seats === 1 ? '' : 's'} · {inr(block.totalAmount)}
+      </p>
+      <p>
+        {block.status === 'CONFIRMED'
+          ? 'Confirmed'
+          : resumable
+            ? `Seats held — ${mmss(block.secondsLeft)} left when checked`
+            : block.status === 'PENDING'
+              ? 'The hold has expired'
+              : titleCase(block.status)}
+      </p>
+      {resumable && (
+        <Link to={`/checkout/${block.bookingId}`} className="btn-primary mt-2 w-full">
+          Resume checkout
+        </Link>
+      )}
+    </section>
+  );
+}
+
 function Block({ block }) {
   switch (block.type) {
     case 'tour_cards':
@@ -107,6 +133,8 @@ function Block({ block }) {
       return <Availability dates={block.dates} />;
     case 'quote':
       return <QuoteCard block={block} />;
+    case 'checkout_state':
+      return <CheckoutState block={block} />;
     default:
       return null;
   }

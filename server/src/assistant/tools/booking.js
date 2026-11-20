@@ -1,10 +1,14 @@
 import { istDate, addDays } from '../intent.js';
 
 /*
- * Booking tools — READ-ONLY in Phase 2a (as in Phase 1).
+ * Booking tools — READ-ONLY (Phases 1, 2a and 2b).
  *
  * Nothing here holds seats, starts checkout, touches Razorpay or writes a
  * booking. Those stay behind the existing authenticated /bookings routes.
+ * In Phase 2b the TRAVELLER places a hold by pressing a button in the browser,
+ * which calls POST /bookings/checkout directly. The model never can: a hold
+ * burns inventory for 10 minutes, so it needs a human click, not a tool call.
+ * test/assistant.noWrites.test.js enforces this.
  *   - price_quote    : same pure computation as the public POST /bookings/quote.
  *                      Also returns a `quote` UI block (date chips + options
  *                      catalog) so the browser can let the traveller adjust the
@@ -95,6 +99,21 @@ export function bookingTools(deps) {
             secondsLeft,
           },
           sources: [{ kind: 'booking', ref: booking.reference }],
+          // Owner-only by construction: getCheckoutState already refused anyone else.
+          // The card links to the existing /checkout page; it never acts by itself.
+          ui: [
+            {
+              type: 'checkout_state',
+              bookingId: booking.id,
+              reference: booking.reference,
+              tour: booking.tour_title,
+              status: booking.status,
+              seats: booking.seat_count,
+              totalAmount: booking.total_amount,
+              holdActive,
+              secondsLeft,
+            },
+          ],
         };
       },
     },
