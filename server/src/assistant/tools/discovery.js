@@ -29,7 +29,12 @@ export function discoveryTools(deps) {
           sort,
           limit: 5,
         });
-        return { data: { total, tours: items.map(card) }, sources: [{ kind: 'tours' }] };
+        const tours = items.map(card);
+        return {
+          data: { total, tours },
+          sources: [{ kind: 'tours' }],
+          ui: tours.length ? [{ type: 'tour_cards', tours }] : [],
+        };
       },
     },
     {
@@ -41,7 +46,12 @@ export function discoveryTools(deps) {
           sort: 'price_asc',
           limit: 5,
         });
-        return { data: { tours: items.map(card) }, sources: [{ kind: 'tours', ref: 'cheapest' }] };
+        const tours = items.map(card);
+        return {
+          data: { tours },
+          sources: [{ kind: 'tours', ref: 'cheapest' }],
+          ui: tours.length ? [{ type: 'tour_cards', tours }] : [],
+        };
       },
     },
     {
@@ -57,17 +67,17 @@ export function discoveryTools(deps) {
           radiusMeters,
           limit: 6,
         });
+        const attractions = rows.map((a) => ({
+          id: a.id,
+          name: a.name,
+          category: a.category,
+          city: a.city,
+          distanceMeters: a.distance_m,
+        }));
         return {
-          data: {
-            attractions: rows.map((a) => ({
-              id: a.id,
-              name: a.name,
-              category: a.category,
-              city: a.city,
-              distanceMeters: a.distance_m,
-            })),
-          },
+          data: { attractions },
           sources: [{ kind: 'attractions', ref: 'nearby' }],
+          ui: attractions.length ? [{ type: 'nearby', attractions }] : [],
         };
       },
     },

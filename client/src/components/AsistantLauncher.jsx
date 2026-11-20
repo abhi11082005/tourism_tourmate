@@ -40,6 +40,11 @@ const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
 // Determine dynamic size based on viewport width (36px for mobile, 64px otherwise)
 const getButtonSize = (vpWidth) => (vpWidth < 768 ? 36 : 64);
 
+// Phones have a fixed bottom tab bar (Layout: min-h-16 plus the home-bar inset).
+// The button and its popup must stay above it or they cover the Trips tab.
+const TAB_BAR_H = 72;
+const bottomInset = (vpWidth) => (vpWidth < 768 ? TAB_BAR_H : 0);
+
 function readDock() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -65,7 +70,7 @@ function bounds(vp, size) {
   const minX = MARGIN;
   const maxX = Math.max(minX, vp.w - size - MARGIN);
   const minY = TOP_LIMIT;
-  const maxY = Math.max(minY, vp.h - size - MARGIN);
+  const maxY = Math.max(minY, vp.h - size - MARGIN - bottomInset(vp.w));
   return { minX, maxX, minY, maxY };
 }
 
@@ -84,6 +89,8 @@ function nearestDock(pos, vp, size) {
 }
 
 export default function AssistantLauncher({ tourId, tourTitle }) {
+  // No tour on screen = the central chatbot; same popup, different wording.
+  const label = tourId ? 'Ask the expert' : 'TourMate assistant';
   const [open, setOpen] = useState(false);
   const [dock, setDock] = useState(readDock);
   const [dragPos, setDragPos] = useState(null); // {x, y} while dragging, else null
@@ -149,7 +156,11 @@ export default function AssistantLauncher({ tourId, tourTitle }) {
     // The top limit keeps the button out of the header while dragging, too.
     const pos = {
       x: clamp(d.originX + dx, 0, window.innerWidth - size),
-      y: clamp(d.originY + dy, TOP_LIMIT, Math.max(TOP_LIMIT, window.innerHeight - size)),
+      y: clamp(
+        d.originY + dy,
+        TOP_LIMIT,
+        Math.max(TOP_LIMIT, window.innerHeight - size - bottomInset(window.innerWidth))
+      ),
     };
     lastPosRef.current = pos;
     setDragPos(pos);
@@ -184,7 +195,7 @@ export default function AssistantLauncher({ tourId, tourTitle }) {
   // Popup geometry: open on the side with more room, aligned toward the screen
   // centre, and sized so it stays below the header and inside the viewport.
   const spaceAbove = target.y - TOP_LIMIT - POPUP_GAP;
-  const spaceBelow = vp.h - (target.y + size) - MARGIN - POPUP_GAP;
+  const spaceBelow = vp.h - (target.y + size) - MARGIN - bottomInset(vp.w) - POPUP_GAP;
   const above = spaceAbove >= spaceBelow;
   const popupH = Math.min(POPUP_MAX_H, Math.max(above ? spaceAbove : spaceBelow, 200));
   const popupW = Math.min(POPUP_MAX_W, vp.w - MARGIN * 2);
@@ -207,7 +218,7 @@ export default function AssistantLauncher({ tourId, tourTitle }) {
       <div
         id="assistant-popup"
         role="dialog"
-        aria-label="Ask the expert"
+        aria-label={label}
         aria-hidden={!open}
         className={`absolute transition duration-200 ${
           open ? 'scale-100 opacity-100' : 'pointer-events-none invisible scale-95 opacity-0'
@@ -243,7 +254,7 @@ export default function AssistantLauncher({ tourId, tourTitle }) {
         onPointerCancel={endDrag}
         aria-expanded={open}
         aria-controls="assistant-popup"
-        aria-label={open ? 'Close the expert chat' : 'Ask the expert'}
+        aria-label={open ? `Close ${label.toLowerCase()}` : label}
         className="h-full w-full cursor-grab touch-none select-none overflow-hidden rounded-full shadow-lg ring-1 ring-white/10 transition-shadow hover:shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-sand-500 active:cursor-grabbing"
       >
         <img

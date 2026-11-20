@@ -1,11 +1,16 @@
 import { useEffect } from 'react';
-import { NavLink, Outlet, Link } from 'react-router-dom';
+import { NavLink, Outlet, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
 import AccountMenu from './AccountMenu.jsx';
 import LocationBanner from './LocationBanner.jsx';
 import SaleAnnouncementBar from './sale/SaleAnnouncementBar.jsx';
+import AssistantLauncher from './AsistantLauncher.jsx';
+
+// Tour pages mount their own tour-scoped assistant; checkout and admin stay
+// distraction-free (and the booking bar owns the bottom of the screen there).
+const NO_CENTRAL_ASSISTANT = [/^\/tours\//, /^\/checkout\//, /^\/admin/];
 
 /*
  * Mobile-first shell: a bottom tab bar on phones (thumb reach), a top bar from
@@ -36,6 +41,8 @@ const topLink = ({ isActive }) =>
 
 export default function Layout() {
   const { user, isGuest, isAdmin } = useAuth();
+  const { pathname } = useLocation();
+  const showCentralAssistant = !NO_CENTRAL_ASSISTANT.some((re) => re.test(pathname));
   const { applyRemoteTheme } = useTheme(); 
   const savedTheme = user?.preferences?.theme;
 
@@ -97,6 +104,8 @@ export default function Layout() {
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-4">
         <Outlet />
       </main>
+
+      {showCentralAssistant && <AssistantLauncher />}
 
       {/* Expanded Multi-Column Footer */}
       <footer className="mt-12 border-t border-sand-200 bg-sand-50 pt-12 dark:border-ink-800 dark:bg-ink-950">

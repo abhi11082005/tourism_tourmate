@@ -1,12 +1,19 @@
+import { istDate, addDays } from '../intent.js';
+
 /*
- * Booking tools — READ-ONLY in Phase 1.
+ * Booking tools — READ-ONLY in Phase 2a (as in Phase 1).
  *
  * Nothing here holds seats, starts checkout, touches Razorpay or writes a
  * booking. Those stay behind the existing authenticated /bookings routes.
  *   - price_quote    : same pure computation as the public POST /bookings/quote.
+ *                      Also returns a `quote` UI block (date chips + options
+ *                      catalog) so the browser can let the traveller adjust the
+ *                      price through the existing public quote endpoint.
  *   - checkout_state : the signed-in user's own booking only; ownership is
  *                      enforced inside booking.getCheckoutState (403 otherwise).
  */
+
+const QUOTE_WINDOW_DAYS = 45;
 
 export function bookingTools(deps) {
   return [
@@ -17,27 +24,52 @@ export function bookingTools(deps) {
         if (!ctx.tourId) return { data: { needsTour: true } };
         if (!seatCount) return { data: { needsSeatCount: true } };
 
-        let slotId;
+        const today = istDate(new Date());
+        const from = today;
+        const to = dateRange?.from && dateRange.from > addDays(today, QUOTE_WINDOW_DAYS)
+          ? dateRange.from
+          : addDays(today, QUOTE_WINDOW_DAYS);
+
+        const [calendar, tourRow] = await Promise.all([
+          deps.booking.getCalendar({ tourId: ctx.tourId, from, to }),
+          deps.db.queryOne('SELECT slug, options FROM tours WHERE id = $1 AND is_published', [ctx.tourId]),
+        ]);
+        const open = calendar.filter((d) => d.isOpen && d.date >= today);
+
+        let slot;
         if (dateRange?.from) {
-          const day = await deps.booking.getCalendar({
-            tourId: ctx.tourId,
-            from: dateRange.from,
-            to: dateRange.from,
-          });
-          const slot = day.find((d) => d.isOpen);
+          slot = open.find((d) => d.date === dateRange.from);
           if (!slot) return { data: { noDeparture: dateRange.from } };
-          slotId = slot.slotId;
         }
 
-        const q = await deps.booking.quote({ tourId: ctx.tourId, slotId, seatCount });
+        const q = await deps.booking.quote({ tourId: ctx.tourId, slotId: slot?.slotId, seatCount });
         return {
           data: {
             seatCount,
-            date: dateRange?.from ?? null,
+            date: slot?.date ?? null,
             totalAmount: q.totalAmount,
             breakdown: q.breakdown,
           },
           sources: [{ kind: 'quote', ref: 'computed' }],
+          ui: [
+            {
+              type: 'quote',
+              tourId: ctx.tourId,
+              slug: tourRow?.slug ?? null,
+              seatCount,
+              slotId: slot?.slotId ?? null,
+              date: slot?.date ?? null,
+              totalAmount: q.totalAmount,
+              lines: q.breakdown.lines,
+              options: tourRow?.options ?? {},
+              dates: open.slice(0, 10).map((d) => ({
+                slotId: d.slotId,
+                date: d.date,
+                seatsLeft: d.availableSeats,
+                extraPerSeat: Number(d.priceModifier) || 0,
+              })),
+            },
+          ],
         };
       },
     },

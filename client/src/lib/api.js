@@ -350,10 +350,10 @@ export const resetAssistantConversation = () => writeConversation(null);
 
 /**
  * @param {{ message: string, tourId?: string, location?: {lat: number, lng: number} }} payload
- * @param {{ onIntent?: Function, onTool?: Function, onSources?: Function, onToken: Function, signal?: AbortSignal }} handlers
+ * @param {{ onIntent?: Function, onTool?: Function, onSources?: Function, onUi?: Function, onToken: Function, signal?: AbortSignal }} handlers
  */
 export async function chatAssistant({ message, tourId, location }, handlers = {}) {
-  const { onIntent, onTool, onSources, onToken, signal } = handlers;
+  const { onIntent, onTool, onSources, onUi, onToken, signal } = handlers;
 
   async function attempt(conversation) {
     const res = await fetch(`${BASE}/assistant/chat`, {
@@ -416,6 +416,7 @@ export async function chatAssistant({ message, tourId, location }, handlers = {}
         } else if (event === 'intent') onIntent?.(parsed);
         else if (event === 'tool') onTool?.(parsed);
         else if (event === 'sources') onSources?.(parsed);
+        else if (event === 'ui') onUi?.(parsed);
         else if (event === 'token') onToken?.(parsed.token);
         else if (event === 'error') throw new ApiError(502, 'ASSISTANT_STREAM', parsed.message);
         else if (event === 'done') return;
@@ -438,5 +439,36 @@ export async function chatAssistant({ message, tourId, location }, handlers = {}
       return;
     }
     throw err;
+  }
+}
+
+
+/**
+ * Past messages of the stored conversation, so the chat keeps its text when the
+ * traveller moves between a central page and a tour page. Cards are not stored,
+ * only the words. A conversation this session can no longer read is forgotten.
+ */
+export async function loadAssistantHistory({ signal } = {}) {
+  const stored = readConversation();
+  if (!stored) return [];
+  try {
+    const res = await fetch(`${BASE}/assistant/conversations/${stored.conversationId}/history`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ guestKey: stored.guestKey }),
+    });
+    if (res.status === 404 || res.status === 422) {
+      writeConversation(null);
+      return [];
+    }
+    if (!res.ok) return [];
+    const body = await res.json();
+    return Array.isArray(body.messages) ? body.messages : [];
+  } catch {
+    return [];
   }
 }

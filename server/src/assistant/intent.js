@@ -41,7 +41,7 @@ export function istDate(d) {
   }).format(d);
 }
 
-const addDays = (iso, n) => {
+export const addDays = (iso, n) => {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);

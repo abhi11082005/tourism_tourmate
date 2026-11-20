@@ -10,7 +10,8 @@ import { selectTools } from './tools/index.js';
  *                     └─(everything else)→ run_tools → respond → END
  *
  *  classify   intent detection + deterministic entity extraction
- *  run_tools  picks tools per intent, runs them in parallel with a per-tool timeout
+ *  run_tools  picks tools per intent, runs them in parallel with a per-tool timeout,
+ *             and emits `sources` plus structured `ui` blocks (cards) for the browser
  *  respond    streams the answer, grounded ONLY in tool output
  *
  * Side effects that reach the browser (SSE) go through `config.configurable.emit`,
@@ -109,7 +110,14 @@ export function buildAssistantGraph({ tools, llm }) {
         try {
           const out = await withTimeout(tool.run(state.context, args), TOOL_TIMEOUT_MS, name);
           emit('tool', { name, group: tool.group, ok: true });
-          return { name, group: tool.group, ok: true, data: out.data, sources: out.sources ?? [] };
+          return {
+            name,
+            group: tool.group,
+            ok: true,
+            data: out.data,
+            sources: out.sources ?? [],
+            ui: out.ui ?? [],
+          };
         } catch (err) {
           // Auth/ownership errors from services (403/404) surface as a failed lookup,
           // never as data. The model is told the lookup failed and nothing else.
@@ -122,7 +130,13 @@ export function buildAssistantGraph({ tools, llm }) {
     const sources = settled.flatMap((r) => r.sources ?? []);
     if (sources.length) emit('sources', sources);
 
-    return { toolResults: settled.map(({ sources: _s, ...rest }) => rest) };
+    // UI blocks are built by the tools from database rows and go straight to the
+    // browser. They are deliberately NOT part of toolResults, so the model never
+    // sees (or gets to rewrite) the cards a traveller will click on.
+    const blocks = settled.flatMap((r) => r.ui ?? []);
+    if (blocks.length) emit('ui', blocks);
+
+    return { toolResults: settled.map(({ sources: _s, ui: _u, ...rest }) => rest) };
   }
 
   async function respond(state, config) {

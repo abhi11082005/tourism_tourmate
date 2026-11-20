@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { chatAssistant } from '../lib/api.js';
+import { chatAssistant, loadAssistantHistory } from '../lib/api.js';
+import { useGeolocation } from '../hooks/useGeolocation.js';
+import AssistantBlocks from './assistant/AssistantBlocks.jsx';
 
 /*
- * "Ask the Expert" chat panel.
+ * TourMate assistant chat panel.
+ *
+ * Two modes, one component:
+ *   - on a tour page (`tourId` set): "Ask the expert" about that tour;
+ *   - anywhere else (no `tourId`): the central chatbot — discover tours, offers,
+ *     places near you.
  *
  * The answer is streamed, so the first words land in a few hundred milliseconds
  * even when the model takes two seconds to finish — that is how the 3-second
@@ -10,13 +17,23 @@ import { chatAssistant } from '../lib/api.js';
  *
  * Tokens are buffered and flushed once per animation frame. Calling setState on
  * every token (there can be 200) is what makes a streaming chat stutter.
+ *
+ * Location is shared only when the traveller taps "Use my location" — the
+ * browser permission prompt never appears on its own.
  */
 
-const SUGGESTIONS = [
+const TOUR_SUGGESTIONS = [
   'Is the AC coach worth it?',
   'What is included in the price?',
   'How many seats are left this weekend?',
   'What happens if I cancel three days before?',
+];
+
+const CENTRAL_SUGGESTIONS = [
+  'Cheapest tours under ₹3000',
+  'Any offers running right now?',
+  'What is near me?',
+  'Find a heritage tour',
 ];
 
 export default function AssistantPanel({ tourId, tourTitle }) {
@@ -24,17 +41,41 @@ export default function AssistantPanel({ tourId, tourTitle }) {
   const [draft, setDraft] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState(null);
+  const [shared, setShared] = useState(null); // { lat, lng } once the traveller opts in
 
   const abortRef = useRef(null);
   const bufferRef = useRef('');
   const frameRef = useRef(0);
   const scrollRef = useRef(null);
 
+  // `request` only fires from the button below; `auto` stays false on purpose.
+  const geo = useGeolocation();
+  const askedForLocation = useRef(false);
+
+  const suggestions = tourId ? TOUR_SUGGESTIONS : CENTRAL_SUGGESTIONS;
+
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Carry the words of an existing conversation across page changes and reloads.
+  useEffect(() => {
+    const controller = new AbortController();
+    loadAssistantHistory({ signal: controller.signal }).then((past) => {
+      if (!controller.signal.aborted && past.length) {
+        setMessages((prev) => (prev.length ? prev : past.map((m) => ({ role: m.role, text: m.text }))));
+      }
+    });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
+
+  useEffect(() => {
+    if (askedForLocation.current && geo.state === 'granted' && geo.isPrecise) {
+      setShared({ lat: geo.coords.lat, lng: geo.coords.lng });
+    }
+  }, [geo.state, geo.isPrecise, geo.coords.lat, geo.coords.lng]);
 
   const flush = useCallback(() => {
     frameRef.current = 0;
@@ -49,10 +90,20 @@ export default function AssistantPanel({ tourId, tourTitle }) {
     });
   }, []);
 
+  const patchLast = useCallback(
+    (patch) =>
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { ...next[next.length - 1], ...patch(next[next.length - 1]) };
+        return next;
+      }),
+    []
+  );
+
   const ask = useCallback(
     async (question) => {
       const trimmed = question.trim();
-      if (trimmed.length < 3 || streaming) return;
+      if (trimmed.length < 2 || streaming) return;
 
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -64,20 +115,16 @@ export default function AssistantPanel({ tourId, tourTitle }) {
       setMessages((prev) => [
         ...prev,
         { role: 'user', text: trimmed },
-        { role: 'assistant', text: '', sources: [] },
+        { role: 'assistant', text: '', sources: [], blocks: [] },
       ]);
 
       try {
         await chatAssistant(
-          { tourId, message: trimmed },
+          { tourId, message: trimmed, ...(shared ? { location: shared } : {}) },
           {
             signal: controller.signal,
-            onSources: (sources) =>
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = { ...next[next.length - 1], sources };
-                return next;
-              }),
+            onSources: (sources) => patchLast(() => ({ sources })),
+            onUi: (blocks) => patchLast((m) => ({ blocks: [...(m.blocks ?? []), ...blocks] })),
             onToken: (token) => {
               bufferRef.current += token;
               if (!frameRef.current) frameRef.current = requestAnimationFrame(flush);
@@ -93,15 +140,27 @@ export default function AssistantPanel({ tourId, tourTitle }) {
         setStreaming(false);
       }
     },
-    [flush, streaming, tourId]
+    [flush, patchLast, shared, streaming, tourId]
   );
 
+  const shareLocation = () => {
+    askedForLocation.current = true;
+    geo.request();
+  };
+
+  const locating = geo.state === 'locating';
+
   return (
-    <section className="card flex h-full flex-col p-4" aria-label="Ask the expert">
+    <section
+      className="card flex h-full flex-col p-4"
+      aria-label={tourId ? 'Ask the expert' : 'TourMate assistant'}
+    >
       <header className="mb-3">
-        <h3 className="text-sm font-semibold">Ask the expert</h3>
+        <h3 className="text-sm font-semibold">{tourId ? 'Ask the expert' : 'TourMate assistant'}</h3>
         <p className="text-xs text-sand-500">
-          Answers come from {tourTitle}&apos;s own itinerary, prices and live seat counts.
+          {tourId
+            ? `Answers come from ${tourTitle}'s own itinerary, prices and live seat counts.`
+            : 'Find tours, check offers and see what is near you.'}
         </p>
       </header>
 
@@ -113,7 +172,7 @@ export default function AssistantPanel({ tourId, tourTitle }) {
       >
         {messages.length === 0 && (
           <div className="flex flex-wrap gap-2">
-            {SUGGESTIONS.map((s) => (
+            {suggestions.map((s) => (
               <button key={s} type="button" className="chip min-h-11 text-left" onClick={() => ask(s)}>
                 {s}
               </button>
@@ -131,6 +190,7 @@ export default function AssistantPanel({ tourId, tourTitle }) {
             {m.text || (streaming && i === messages.length - 1 ? (
               <span className="text-sand-500">thinking…</span>
             ) : null)}
+            <AssistantBlocks blocks={m.blocks} />
             {m.role === 'assistant' && m.sources?.length > 0 && (
               <p className="mt-2 text-[11px] text-sand-500">
                 from: {m.sources.map((s) => s.ref ?? s.kind).join(', ')}
@@ -142,8 +202,27 @@ export default function AssistantPanel({ tourId, tourTitle }) {
 
       {error && <p className="mt-2 rounded-xl bg-red-50 p-2 text-xs text-red-700">{error}</p>}
 
+      <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+        {shared ? (
+          <span className="faint">Using your location</span>
+        ) : (
+          <button
+            type="button"
+            className="chip min-h-9"
+            onClick={shareLocation}
+            disabled={locating}
+            aria-busy={locating}
+          >
+            {locating ? 'Locating…' : 'Use my location'}
+          </button>
+        )}
+        {geo.state === 'denied' && !shared && (
+          <span className="faint">Location blocked — name a city instead.</span>
+        )}
+      </div>
+
       <form
-        className="mt-3 flex gap-2"
+        className="mt-2 flex gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           ask(draft);
@@ -155,7 +234,7 @@ export default function AssistantPanel({ tourId, tourTitle }) {
         <input
           id="assistant-input"
           className="field flex-1"
-          placeholder="Ask about food, timings, refunds…"
+          placeholder={tourId ? 'Ask about food, timings, refunds…' : 'Ask about tours, offers, places…'}
           value={draft}
           maxLength={500}
           onChange={(e) => setDraft(e.target.value)}
@@ -165,7 +244,7 @@ export default function AssistantPanel({ tourId, tourTitle }) {
             Stop
           </button>
         ) : (
-          <button type="submit" className="btn-primary" disabled={draft.trim().length < 3}>
+          <button type="submit" className="btn-primary" disabled={draft.trim().length < 2}>
             Ask
           </button>
         )}

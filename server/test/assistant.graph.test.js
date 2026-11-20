@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAssistantGraph } from '../src/assistant/graph.js';
 import { buildTools, selectTools } from '../src/assistant/tools/index.js';
+import { istDate, addDays } from '../src/assistant/intent.js';
 
 /*
  * End-to-end graph tests with the REAL tool code and FAKE services/LLM: no
@@ -10,6 +11,12 @@ import { buildTools, selectTools } from '../src/assistant/tools/index.js';
  */
 
 const TOUR = '11111111-1111-4111-8111-111111111111';
+
+// Relative to the real clock: tools drop past dates, so fixed dates would rot.
+const TODAY = istDate(new Date());
+const D1 = addDays(TODAY, 2);
+const D2 = addDays(TODAY, 3);
+const OPTIONS = { photographer: { label: 'Photographer', type: 'boolean', pricePerSeat: 400 } };
 
 function makeDeps(overrides = {}) {
   const calls = [];
@@ -31,12 +38,16 @@ function makeDeps(overrides = {}) {
     },
     db: {
       query: rec('query', { rows: [] }),
-      queryOne: rec('queryOne', { title: 'Kashi Heritage Walk', refund_policy: [{ daysBefore: 3, percent: 50 }], inclusions: [], exclusions: [] }),
+      queryOne: rec('queryOne', (sql) =>
+        sql.includes('slug, options')
+          ? { slug: 'kashi', options: OPTIONS }
+          : { title: 'Kashi Heritage Walk', refund_policy: [{ daysBefore: 3, percent: 50 }], inclusions: [], exclusions: [] }
+      ),
     },
     booking: {
       getCalendar: rec('getCalendar', [
-        { slotId: 's1', date: '2026-11-21', isOpen: true, availableSeats: 5, priceModifier: '0.00' },
-        { slotId: 's2', date: '2026-11-22', isOpen: true, availableSeats: 1, priceModifier: '100.00' },
+        { slotId: 's1', date: D1, isOpen: true, availableSeats: 5, priceModifier: '0.00' },
+        { slotId: 's2', date: D2, isOpen: true, availableSeats: 1, priceModifier: '100.00' },
       ]),
       quote: rec('quote', { totalAmount: '2997.00', breakdown: { lines: [] } }),
       getCheckoutState: rec('getCheckoutState', {
@@ -215,4 +226,81 @@ test('prompt injection in the message cannot choose tools or arguments', () => {
     context: { tourId: TOUR },
   });
   assert.deepEqual(picks.map((p) => p.name), ['tour_knowledge']);
+});
+
+/* ------------------------------------------------------------ UI blocks (Phase 2a) */
+
+const uiBlocks = (r) => r.events.filter((e) => e.event === 'ui').flatMap((e) => e.data);
+
+test('ui: discovery emits tour cards built from DB rows', async () => {
+  const r = await run({ question: 'cheapest tour' });
+  const [block] = uiBlocks(r);
+  assert.equal(block.type, 'tour_cards');
+  assert.deepEqual(Object.keys(block.tours[0]).sort(), ['basePrice', 'days', 'id', 'nights', 'rating', 'reviews', 'slug', 'teaser', 'title', 'tourType']);
+  assert.equal(block.tours[0].slug, 'kashi');
+});
+
+test('ui: blocks reach the browser but never the model', async () => {
+  const r = await run({ question: 'how much for 2 people?', context: { tourId: TOUR } });
+  assert.equal(uiBlocks(r).length, 1);
+  assert.ok(!('ui' in r.state.toolResults[0]), 'ui stripped from graph state');
+  assert.ok(!r.prompt.includes('slotId'), 'slot ids / option catalog stay out of the prompt');
+  assert.ok(!r.prompt.includes('photographer'));
+});
+
+test('ui: quote block carries what the price-choices card needs', async () => {
+  const r = await run({ question: 'how much for 3 people?', context: { tourId: TOUR } });
+  const q = uiBlocks(r).find((b) => b.type === 'quote');
+  assert.equal(q.tourId, TOUR);
+  assert.equal(q.slug, 'kashi');
+  assert.equal(q.seatCount, 3);
+  assert.equal(q.totalAmount, '2997.00');
+  assert.deepEqual(q.options, OPTIONS);
+  assert.deepEqual(q.dates.map((d) => [d.slotId, d.date, d.seatsLeft]), [['s1', D1, 5], ['s2', D2, 1]]);
+});
+
+test('ui: a quote for a named date prices that departure', async () => {
+  const r = await run({ question: `how much for 2 people on ${D2}`, context: { tourId: TOUR } });
+  const quote = r.calls.find((c) => c.name === 'quote');
+  assert.equal(quote.args[0].slotId, 's2');
+  const q = uiBlocks(r).find((b) => b.type === 'quote');
+  assert.equal(q.slotId, 's2');
+  assert.equal(q.date, D2);
+});
+
+test('ui: a date with no open departure is reported, not priced', async () => {
+  const r = await run({ question: `how much for 2 people on ${addDays(TODAY, 30)}`, context: { tourId: TOUR } });
+  assert.equal(r.called('quote'), false);
+  assert.equal(uiBlocks(r).length, 0);
+  assert.match(r.prompt, /no open departure/);
+});
+
+test('ui: availability and offers blocks', async () => {
+  const a = await run({ question: 'seats left?', context: { tourId: TOUR } });
+  const block = uiBlocks(a).find((b) => b.type === 'availability');
+  assert.equal(block.tourId, TOUR);
+  assert.equal(block.dates.length, 2);
+  const o = await run({ question: 'any offers running?' });
+  assert.deepEqual(uiBlocks(o)[0], { type: 'offers', offers: [{ name: 'Dev Deepawali', discountPercent: 15, endsAt: null }] });
+});
+
+test('ui: nearby block only when a location was shared', async () => {
+  const none = await run({ question: 'what is near me?' });
+  assert.equal(uiBlocks(none).length, 0);
+  const some = await run({ question: 'what is near me?', context: { location: { lat: 25.3, lng: 83.0 } } });
+  assert.equal(uiBlocks(some)[0].type, 'nearby');
+  assert.equal(uiBlocks(some)[0].attractions[0].distanceMeters, 400);
+});
+
+test('ui: empty results and failed tools emit no blocks', async () => {
+  const empty = await run({
+    question: 'cheapest tour',
+    depsOverrides: { tours: { listTours: async () => ({ total: 0, items: [] }) } },
+  });
+  assert.equal(uiBlocks(empty).length, 0);
+  const failed = await run({
+    question: 'cheapest tour',
+    depsOverrides: { tours: { listTours: async () => { throw new Error('db down'); } } },
+  });
+  assert.equal(uiBlocks(failed).length, 0);
 });
