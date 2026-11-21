@@ -52,10 +52,11 @@ export function selectTools({ intent, entities, question, context }) {
       if (/\b(offers?|discounts?|coupons?|deals?|sale)\b/i.test(question)) {
         picks.push({ name: 'active_offers', args: {} });
       }
+      if (e.couponCode) picks.push({ name: 'check_coupon', args: { couponCode: e.couponCode, seatCount: e.seatCount } });
       if (context.tourId && (picks.length === 0 || /\b(seats?|availab\w*|dates?)\b/i.test(question))) {
         picks.push({
           name: 'seat_availability',
-          args: { dateRange: e.dateRange, seatCount: e.seatCount },
+          args: { dateRange: e.dateRange, seatCount: e.seatCount, dateProblem: e.dateProblem },
         });
       }
       // Seats were asked about but no tour is known: show tours to choose from.
@@ -69,9 +70,10 @@ export function selectTools({ intent, entities, question, context }) {
       }
       // Wants to book but has not said which tour: put the tours in front of them.
       if (!context.tourId) return [{ name: 'search_tours', args: { forBooking: true } }];
-      return [{ name: 'price_quote', args: { seatCount: e.seatCount, dateRange: e.dateRange } }];
+      return [{ name: 'price_quote', args: { seatCount: e.seatCount, dateRange: e.dateRange, dateProblem: e.dateProblem } }];
     }
 
+    // "what happened?": explained from the stored state and the last answer; no new lookups.
     default:
       return [];
   }

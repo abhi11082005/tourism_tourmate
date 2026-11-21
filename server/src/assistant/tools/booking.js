@@ -1,4 +1,4 @@
-import { istDate, addDays } from '../intent.js';
+import { istDate, addDays } from '../dates.js';
 
 /*
  * Booking tools — READ-ONLY (Phases 1, 2a and 2b).
@@ -24,8 +24,14 @@ export function bookingTools(deps) {
     {
       name: 'price_quote',
       group: 'booking',
-      async run(ctx, { seatCount: askedSeats, dateRange } = {}) {
+      async run(ctx, { seatCount: askedSeats, dateRange, dateProblem } = {}) {
         if (!ctx.tourId) return { data: { needsTour: true } };
+        if (dateProblem) return { data: { dateProblem } };
+
+        // "this weekend" is two days. A price belongs to ONE departure, so ask which.
+        if (dateRange && dateRange.from !== dateRange.to) {
+          return { data: { needsDay: [dateRange.from, dateRange.to] } };
+        }
 
         // Nobody said how many: price one seat and let them change it on the card,
         // which is quicker than another round of questions.
@@ -57,6 +63,8 @@ export function bookingTools(deps) {
             seatCount,
             seatCountAssumed,
             date: slot?.date ?? null,
+            // No date chosen yet: this is the standard price; a date can add a surcharge.
+            dateAssumed: !slot,
             totalAmount: q.totalAmount,
             breakdown: q.breakdown,
           },

@@ -160,8 +160,8 @@ test('seat count and date carry over: "for 2 people" after booking on a date', a
   assert.equal(r.quote.date, DEPART);
 });
 
-test('"yes" and "what happen" continue the previous topic instead of starting a new search', async () => {
-  for (const q of ['yes', 'what happen', 'ok what happens']) {
+test('"yes" and "ok what happens" continue the previous topic instead of starting a new search', async () => {
+  for (const q of ['yes', 'ok what happens']) {
     const r = await turn({
       question: q,
       context: { focusTourId: PINK },
@@ -170,6 +170,19 @@ test('"yes" and "what happen" continue the previous topic instead of starting a 
     assert.equal(r.state.intent, 'booking', q);
     assert.ok(r.quote, `${q} -> a price card`);
   }
+});
+
+test('"what happened?" explains the last step and runs no new lookup', async () => {
+  const r = await turn({
+    question: 'what happened?',
+    context: { focusTourId: PINK, memory: { selectedTourId: PINK, selectedTourName: 'Pink City Heritage Trail', lastIntent: 'booking', lastTool: 'price_quote', lastStatus: 'needs_input', pendingAction: 'provide_date', missingFields: ['travelDate'] } },
+    history: [{ role: 'assistant', content: 'Which day?', intent: 'booking' }],
+  });
+  assert.equal(r.state.intent, 'followup');
+  assert.equal(r.calls.length, 0, 'no tool ran');
+  assert.match(r.seen.prompt, /CONVERSATION SO FAR: .*tour=Pink City Heritage Trail.*waiting_for=travelDate/);
+  assert.match(r.seen.prompt, /asking what just happened/);
+  assert.ok(!r.called('listTours'));
 });
 
 test('"yes" with no history at all still answers (shows tours) rather than failing', async () => {

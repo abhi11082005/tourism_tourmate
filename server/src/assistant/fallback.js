@@ -10,8 +10,26 @@ const inr = (n) => `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigi
 const list = (names) => names.join(', ');
 
 export function fallbackAnswer(state) {
+  if (state.intent === 'followup') {
+    const m = state.memory;
+    if (m?.pendingAction) {
+      const need = { choose_tour: 'which tour you want', provide_date: 'a travel date', share_location: 'your location', provide_booking_id: 'the booking reference', provide_coupon: 'the coupon code', sign_in: 'you to sign in' }[m.pendingAction] ?? 'one more detail';
+      return `I am waiting for ${need}${m.selectedTourName ? ` to continue with ${m.selectedTourName}` : ''}.`;
+    }
+    if (m?.selectedTourName) return `We were looking at ${m.selectedTourName}${m.travelDate ? ` for ${m.travelDate.from}` : ''}. Ask me for seats, a price or offers whenever you are ready.`;
+    return 'Nothing is pending yet. Ask me about tours, seats, prices or offers.';
+  }
+  const down = state.toolResults.find((t) => t.status === 'unavailable');
+  if (down) return 'Our booking data is not reachable right now, so I cannot check that. Please try again in a minute.';
   for (const r of state.toolResults.filter((t) => t.ok)) {
     const d = r.data ?? {};
+
+    if (d.dateProblem) return `${d.dateProblem.message} Please give me a valid upcoming date.`;
+    if (d.needsDay) return `A weekend is two days. Which one: ${d.needsDay.join(' or ')}?`;
+    if (d.couponProblem) return `That coupon cannot be used: ${d.couponProblem}`;
+    if (d.needsCoupon) return 'Which coupon code would you like me to check?';
+    if (d.discountAmount != null) return `${d.couponCode} is valid: ${inr(d.discountAmount)} off ${inr(d.orderTotal)}, so ${inr(d.finalAmount)} at the standard price. It is applied on the tour page when you book.`;
+    if (d.allSoldOut) return 'Every open date in that window is sold out. Try another window or another tour.';
 
     if (d.needsLocation) return 'Tap “Use my location” below and I will look for places near you.';
     if (d.requiresAuth) return 'Please sign in so I can look up your booking.';

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { INTENTS } from './state.js';
+import { memoryEntities } from './memory.js';
+import { istDate, addDays, resolveDateRange, dateProblem, MONTH_SRC } from './dates.js';
 
 /*
  * Intent detection.
@@ -14,10 +16,13 @@ import { INTENTS } from './state.js';
  */
 
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
-const ISO_DATE_RE = /\b(\d{4}-\d{2}-\d{2})\b/;
+
+// "what happened?", "so?", "any update": about the last answer, not a new search.
+const RECAP_RE =
+  /^\s*(what\s*(has\s*|had\s*)?(happen(ed|s|ing)?|went wrong|is going on|now)|what\s+was\s+that|and\s+now|so+|any\s+update|status|why|huh|what\s*\?)[\s?!.]*$/i;
 
 const RULES = {
-  booking: /\b(book|booking|reserve|quote|checkout|check out|total (cost|price)|how much (for|will)|price for|pay)\b/i,
+  booking: /\b(book|booking|reserve|quote|checkout|check out|total (cost|price|amount)|final (price|cost|amount|total)|how much (for|will)|price for|pay)\b/i,
   live: /\b(seats?|availab\w*|sold out|full|offers?|discounts?|coupons?|deals?|sale|dates?|departures?|when (is|are|can))\b/i,
   discover: /\b(cheapest|cheap|budget|affordable|under|below|find|show me|recommend|suggest|packages?|tours? (in|to|for)|near ?me|nearby|around me|close to|places?)\b/i,
   rag: /\b(itinerary|includ\w*|exclu\w*|refund|cancel\w*|polic\w*|food|meals?|pick ?up|drop ?off|timings?|what to (carry|wear|bring)|worth|day \d|stops?|guide|difficulty|safe)\b/i,
@@ -31,92 +36,17 @@ const RULES = {
   ),
 };
 
-/** IST calendar date (YYYY-MM-DD) for a Date, regardless of server timezone. */
-export function istDate(d) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
-}
+export { istDate, addDays, resolveDateRange, dateProblem };
 
-export const addDays = (iso, n) => {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
+const COUPON_STOP = new Set(['CODE', 'CODES', 'ANY', 'THE', 'FOR', 'THIS', 'THAT', 'VALID', 'AVAILABLE', 'WORK', 'WORKS', 'APPLY', 'APPLIED', 'HAVE', 'HAVING', 'YOUR', 'WITH', 'DISCOUNT', 'OFFER', 'OFFERS', 'COUPON', 'COUPONS', 'PROMO', 'VOUCHER', 'ACTIVE', 'TODAY']);
 
-const MONTHS = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
-const MONTH_SRC =
-  '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
-const DAY_MONTH = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s*(?:of\\s+)?${MONTH_SRC}\\b(?:[,\\s]+(\\d{4}))?`, 'i');
-// "may 2 people" is a group size, not a date.
-const MONTH_DAY = new RegExp(
-  `\\b${MONTH_SRC}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?![\\s,]*(?:people|persons?|pax|seats?|adults?|travell?ers?|tickets?))(?:[,\\s]+(\\d{4}))?`,
-  'i'
-);
-const NUMERIC_DMY = /\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b/; // India: day first
-const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-const WEEKDAY_RE = new RegExp(`\\b(${WEEKDAYS.join('|')})\\b`, 'i');
-
-/** A real calendar date as YYYY-MM-DD, or null (31 February is not a date). */
-function buildDate(year, month, day) {
-  const d = new Date(Date.UTC(year, month, day));
-  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month || d.getUTCDate() !== day) return null;
-  return d.toISOString().slice(0, 10);
-}
-
-/**
- * Resolve the date a traveller means into { from, to } (IST calendar days).
- * Handles ISO, "21 november 2026", "21st Nov", "november 21", "21/11/2026",
- * today / tomorrow / this weekend / "saturday". A day+month with no year means the
- * next time that date comes round, so "29 october" said in November is next year.
- */
-export function resolveDateRange(text, now = new Date()) {
-  const today = istDate(now);
-  const thisYear = Number(today.slice(0, 4));
-  const range = (iso) => (iso ? { from: iso, to: iso } : null);
-
-  const iso = text.match(ISO_DATE_RE)?.[1];
-  if (iso) return range(iso);
-
-  const dmy = text.match(NUMERIC_DMY);
-  if (dmy) {
-    const found = buildDate(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
-    if (found) return range(found);
-  }
-
-  const named = text.match(DAY_MONTH);
-  const named2 = named ? null : text.match(MONTH_DAY);
-  if (named || named2) {
-    const [day, monthWord, yearText] = named
-      ? [Number(named[1]), named[2], named[3]]
-      : [Number(named2[2]), named2[1], named2[3]];
-    const month = MONTHS[monthWord.slice(0, 3).toLowerCase()];
-    if (yearText) return range(buildDate(Number(yearText), month, day));
-    const upcoming = buildDate(thisYear, month, day);
-    if (upcoming) return range(upcoming >= today ? upcoming : buildDate(thisYear + 1, month, day));
-  }
-
-  if (/\btoday\b/i.test(text)) return range(today);
-  if (/\btomorrow\b/i.test(text)) return range(addDays(today, 1));
-  if (/\b(this|coming) weekend\b/i.test(text)) {
-    const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = Sunday
-    const toSaturday = (6 - dow + 7) % 7;
-    const saturday = dow === 0 ? addDays(today, -1) : addDays(today, toSaturday);
-    return { from: dow === 0 ? today : saturday, to: dow === 0 ? today : addDays(saturday, 1) };
-  }
-
-  const weekday = text.match(WEEKDAY_RE);
-  if (weekday) {
-    const target = WEEKDAYS.indexOf(weekday[1].toLowerCase());
-    const dow = new Date(`${today}T00:00:00Z`).getUTCDay();
-    return range(addDays(today, (target - dow + 7) % 7));
-  }
-  return null;
+/** "apply coupon SAVE10" / "promo code diwali20" -> SAVE10. A codeword needs a digit or capitals, so "any coupon available" is not a code. */
+function couponCodeIn(text) {
+  const m = text.match(/\b(?:coupon|promo(?:\s*code)?|voucher|code)\s*(?:code\s*)?(?:is|:|=)?\s*["'`]?([A-Za-z][A-Za-z0-9_-]{3,19})\b/i)
+    ?? text.match(/\b(?:apply|use|try|redeem)\s+["'`]?([A-Za-z][A-Za-z0-9_-]{3,19})\b(?=.*\b(?:coupon|code|promo)\b)/i);
+  const word = m?.[1];
+  if (!word || COUPON_STOP.has(word.toUpperCase())) return null;
+  return /\d/.test(word) || word === word.toUpperCase() ? word.toUpperCase() : null;
 }
 
 export function extractEntities(question, now = new Date()) {
@@ -135,8 +65,17 @@ export function extractEntities(question, now = new Date()) {
 
   if (/\b(cheapest|lowest price|most affordable|budget)\b/i.test(question)) entities.cheapest = true;
 
-  const range = resolveDateRange(question, now);
-  if (range) entities.dateRange = range;
+  // A date that does not exist, or has passed, is reported to the traveller, never silently
+  // replaced by another day or sent on to the database.
+  const problem = dateProblem(question, now);
+  if (problem) entities.dateProblem = problem;
+  else {
+    const range = resolveDateRange(question, now);
+    if (range) entities.dateRange = range;
+  }
+
+  const coupon = couponCodeIn(question);
+  if (coupon) entities.couponCode = coupon;
 
   const id = question.match(UUID_RE)?.[0];
   if (id) entities.bookingId = id;
@@ -165,6 +104,7 @@ export function stickyEntities(history = [], now = new Date()) {
  */
 export function heuristicClassify(question, { tourId = null } = {}) {
   if (RULES.smalltalk.test(question)) return { intent: 'smalltalk', confidence: 0.95 };
+  if (RECAP_RE.test(question)) return { intent: 'followup', confidence: 0.95 };
 
   const hits = ['booking', 'live', 'discover', 'rag'].filter((k) => RULES[k].test(question));
 
@@ -191,9 +131,14 @@ const CLASSIFIER_PROMPT =
 /**
  * @param {{ question: string, context: { tourId: string|null }, history?: object[], llm?: { configured: boolean, completeJson: Function } }} args
  */
-export async function classifyIntent({ question, context, history = [], llm, now = new Date() }) {
-  const entities = { ...stickyEntities(history, now), ...extractEntities(question, now) };
+export async function classifyIntent({ question, context, history = [], memory = null, llm, now = new Date() }) {
+  // Newest wins: this message > stored conversation state > what recent messages said.
+  const entities = { ...stickyEntities(history, now), ...memoryEntities(memory), ...extractEntities(question, now) };
   const guess = heuristicClassify(question, context);
+  // "what happened?" needs something to be about.
+  if (guess.intent === 'followup' && !history.some((m) => m.role === 'assistant')) {
+    return { intent: 'discover', entities, source: 'rules' };
+  }
 
   // "yes", "ok what happens", "for 2 people": nothing in the words says what is meant,
   // so carry on with what the conversation was just about.

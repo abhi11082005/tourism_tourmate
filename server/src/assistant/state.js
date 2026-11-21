@@ -8,7 +8,7 @@ import { Annotation } from '@langchain/langgraph';
  * conversation history are untrusted user text; tool results are data, never
  * instructions.
  */
-export const INTENTS = ['discover', 'rag', 'live', 'booking', 'smalltalk'];
+export const INTENTS = ['discover', 'rag', 'live', 'booking', 'smalltalk', 'followup'];
 
 export const AssistantState = Annotation.Root({
   question: Annotation(),
@@ -26,5 +26,7 @@ export const AssistantState = Annotation.Root({
   }),
   /** { tourId, slug, title } of the tour this turn is about (page, named in the message, or remembered). */
   tour: Annotation(),
+  /** Conversation state (selected tour, date, travellers, pending question); stored on the conversation. */
+  memory: Annotation(),
   answer: Annotation(),
 });

@@ -45,8 +45,8 @@ export async function createConversation({ userId, tourId = null }) {
  */
 export async function getOwnedConversation({ conversationId, userId, guestKey }) {
   const row = await queryOne(
-    `SELECT id, user_id, guest_key_hash, tour_id
-       FROM assistant_conversations WHERE id = $1`,
+    // `*` on purpose: `state` only exists once migration 0008 is applied, and chat must keep working before that.
+    `SELECT * FROM assistant_conversations WHERE id = $1`,
     [conversationId]
   );
   if (!row) throw notFound('Conversation not found');
@@ -56,12 +56,24 @@ export async function getOwnedConversation({ conversationId, userId, guestKey })
     : Boolean(guestKey) && row.guest_key_hash === sha256(guestKey);
   if (!owns) throw notFound('Conversation not found');
 
-  return { id: row.id, tourId: row.tour_id };
+  return { id: row.id, tourId: row.tour_id, state: row.state ?? {} };
 }
 
 /** Remember which tour this conversation is about, so follow-ups need not repeat its name. */
 export async function setConversationTour(conversationId, tourId) {
   await query('UPDATE assistant_conversations SET tour_id = $2 WHERE id = $1', [conversationId, tourId]);
+}
+
+/**
+ * Store what the conversation has settled (see assistant/memory.js). Quietly does nothing
+ * until migration 0008 has added the column, so a missed migration never breaks chat.
+ */
+export async function setConversationState(conversationId, state) {
+  try {
+    await query('UPDATE assistant_conversations SET state = $2::jsonb WHERE id = $1', [conversationId, JSON.stringify(state ?? {})]);
+  } catch (err) {
+    if (err?.code !== '42703') throw err; // undefined_column
+  }
 }
 
 /** Most recent messages, oldest first, for prompt history and for replay. */

@@ -6,6 +6,31 @@ import { loadRazorpay } from '../lib/razorpay.js';
 import { useCountdown } from '../hooks/useCountdown.js';
 import { inr, mmss } from '../lib/format.js';
 
+/** Same shape as the real page (timer card, summary, pay button) so nothing jumps when it loads. */
+function CheckoutSkeleton() {
+  const bar = 'rounded-full bg-sand-200 dark:bg-ink-700';
+  return (
+    <div className="mx-auto max-w-md space-y-4 motion-safe:animate-pulse" role="status" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Getting your seats and payment ready…</span>
+      <div className="space-y-2 rounded-2xl bg-sand-100 p-4 dark:bg-ink-800">
+        <div className={`mx-auto h-3 w-24 ${bar}`} />
+        <div className={`mx-auto h-8 w-28 ${bar}`} />
+        <div className={`mx-auto h-3 w-48 ${bar}`} />
+      </div>
+      <div className="card space-y-3 p-4 dark:bg-ink-900 dark:border-ink-800">
+        <div className={`h-5 w-40 ${bar}`} />
+        <div className={`h-3 w-full ${bar}`} />
+        <div className={`h-3 w-5/6 ${bar}`} />
+        <div className="flex justify-between pt-2">
+          <div className={`h-4 w-16 ${bar}`} />
+          <div className={`h-4 w-24 ${bar}`} />
+        </div>
+        <div className="h-11 w-full rounded-xl bg-sand-200 dark:bg-ink-700" />
+      </div>
+    </div>
+  );
+}
+
 export default function Checkout() {
   const { bookingId } = useParams();
   const navigate = useNavigate(); 
@@ -131,8 +156,21 @@ export default function Checkout() {
     rzp.open();
   }, [bookingId, confirm, refetch]);
 
-  if (isPending) return <p className="py-10 text-center text-sm text-sand-500 dark:text-sand-400">Loading checkout…</p>;
-  if (isError) return <p className="py-10 text-center text-sm text-red-700 dark:text-red-400">{error.message}</p>;
+  if (isPending) return <CheckoutSkeleton />;
+  if (isError) {
+    return (
+      <div className="card mx-auto max-w-md space-y-3 p-6 text-center dark:bg-ink-900 dark:border-ink-800" role="alert">
+        <h1 className="text-lg font-bold dark:text-sand-50">We could not open this checkout</h1>
+        <p className="text-sm text-ink-700 dark:text-sand-300">{error.message}</p>
+        <button type="button" className="btn-primary w-full" onClick={() => refetch()}>
+          Try again
+        </button>
+        <Link to="/dashboard/trips" className="btn-ghost w-full">
+          My trips
+        </Link>
+      </div>
+    );
+  }
 
   if (data.status === 'CONFIRMED') {
     return (

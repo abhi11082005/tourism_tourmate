@@ -22,6 +22,6 @@ export async function defaultDeps() {
       quote: booking.quote,
       getCheckoutState: booking.getCheckoutState,
     },
-    offers: { activeCampaigns: offers.activeCampaigns },
+    offers: { activeCampaigns: offers.activeCampaigns, validateCoupon: offers.validateCoupon },
   };
 }

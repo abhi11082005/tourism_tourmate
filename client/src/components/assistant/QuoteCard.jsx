@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../../lib/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { inr, shortDate } from '../../lib/format.js';
+import Spinner from '../Spinner.jsx';
 
 /*
  * Price choices inside the chat: date, seats and the tour's options.
@@ -110,7 +111,11 @@ export default function QuoteCard({ block }) {
   }
 
   return (
-    <section className="card space-y-3 p-3 text-sm" aria-label="Price estimate">
+    <section
+      className={`card space-y-3 p-3 text-sm transition-opacity ${holding ? 'pointer-events-none opacity-70' : ''}`}
+      aria-label="Price estimate"
+      aria-busy={holding}
+    >
       {tourTitle && <p className="font-medium">{tourTitle}</p>}
       <div>
         <p className="faint text-xs">Date</p>
@@ -228,6 +233,12 @@ export default function QuoteCard({ block }) {
 
       {error && <p className="notice-error">{error}</p>}
 
+      {holding && (
+        <p className="faint text-center text-xs" role="status">
+          Your seats are being held. Taking you to secure payment…
+        </p>
+      )}
+
       {holdError && <p className="notice-error" role="alert">{holdError}</p>}
 
       {isGuest && status !== 'restoring' ? (
@@ -242,7 +253,15 @@ export default function QuoteCard({ block }) {
           disabled={!slotId || holding || busy || status === 'restoring'}
           aria-busy={holding}
         >
-          {holding ? 'Holding seats…' : slotId ? 'Hold seats for 10 minutes' : 'Pick a date to hold seats'}
+          {holding ? (
+            <span className="inline-flex items-center justify-center gap-2">
+              <Spinner /> Securing your seats…
+            </span>
+          ) : slotId ? (
+            'Hold seats for 10 minutes'
+          ) : (
+            'Pick a date to hold seats'
+          )}
         </button>
       )}
 

@@ -20,6 +20,7 @@ import {
   recentMessages,
   appendMessage,
   setConversationTour,
+  setConversationState,
 } from '../services/assistantConversations.service.js';
 
 export const assistantRouter = Router();
@@ -163,6 +164,7 @@ assistantRouter.post(
             user,
             location: location ?? null,
             focusTourId: conversation.tourId ?? null,
+            memory: conversation.state ?? null,
           },
         },
         {
@@ -178,6 +180,12 @@ assistantRouter.post(
       if (aboutTour && aboutTour !== conversation.tourId) {
         await setConversationTour(conversation.id, aboutTour).catch((err) =>
           logger.error({ err }, 'assistant: could not store conversation tour')
+        );
+      }
+
+      if (state.memory) {
+        await setConversationState(conversation.id, state.memory).catch((err) =>
+          logger.error({ err }, 'assistant: could not store conversation state')
         );
       }
 

@@ -1,3 +1,4 @@
+import { ThinkingDots } from './Spinner.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { chatAssistant, loadAssistantHistory } from '../lib/api.js';
 import { useGeolocation } from '../hooks/useGeolocation.js';
@@ -188,7 +189,7 @@ export default function AssistantPanel({ tourId, tourTitle }) {
             }`}
           >
             {m.text || (streaming && i === messages.length - 1 ? (
-              <span className="text-sand-500">thinking…</span>
+              <ThinkingDots />
             ) : null)}
             <AssistantBlocks blocks={m.blocks} />
             {m.role === 'assistant' && m.sources?.length > 0 && (
