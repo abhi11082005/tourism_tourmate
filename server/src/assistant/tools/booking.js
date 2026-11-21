@@ -24,9 +24,13 @@ export function bookingTools(deps) {
     {
       name: 'price_quote',
       group: 'booking',
-      async run(ctx, { seatCount, dateRange } = {}) {
+      async run(ctx, { seatCount: askedSeats, dateRange } = {}) {
         if (!ctx.tourId) return { data: { needsTour: true } };
-        if (!seatCount) return { data: { needsSeatCount: true } };
+
+        // Nobody said how many: price one seat and let them change it on the card,
+        // which is quicker than another round of questions.
+        const seatCount = askedSeats ?? 1;
+        const seatCountAssumed = !askedSeats;
 
         const today = istDate(new Date());
         const from = today;
@@ -36,7 +40,7 @@ export function bookingTools(deps) {
 
         const [calendar, tourRow] = await Promise.all([
           deps.booking.getCalendar({ tourId: ctx.tourId, from, to }),
-          deps.db.queryOne('SELECT slug, options FROM tours WHERE id = $1 AND is_published', [ctx.tourId]),
+          deps.db.queryOne('SELECT slug, title, options FROM tours WHERE id = $1 AND is_published', [ctx.tourId]),
         ]);
         const open = calendar.filter((d) => d.isOpen && d.date >= today);
 
@@ -49,7 +53,9 @@ export function bookingTools(deps) {
         const q = await deps.booking.quote({ tourId: ctx.tourId, slotId: slot?.slotId, seatCount });
         return {
           data: {
+            tour: tourRow?.title ?? null,
             seatCount,
+            seatCountAssumed,
             date: slot?.date ?? null,
             totalAmount: q.totalAmount,
             breakdown: q.breakdown,
@@ -60,6 +66,7 @@ export function bookingTools(deps) {
               type: 'quote',
               tourId: ctx.tourId,
               slug: tourRow?.slug ?? null,
+              tourTitle: tourRow?.title ?? null,
               seatCount,
               slotId: slot?.slotId ?? null,
               date: slot?.date ?? null,

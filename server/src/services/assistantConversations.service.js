@@ -59,6 +59,11 @@ export async function getOwnedConversation({ conversationId, userId, guestKey })
   return { id: row.id, tourId: row.tour_id };
 }
 
+/** Remember which tour this conversation is about, so follow-ups need not repeat its name. */
+export async function setConversationTour(conversationId, tourId) {
+  await query('UPDATE assistant_conversations SET tour_id = $2 WHERE id = $1', [conversationId, tourId]);
+}
+
 /** Most recent messages, oldest first, for prompt history and for replay. */
 export async function recentMessages(conversationId, limit = 10) {
   const { rows } = await query(

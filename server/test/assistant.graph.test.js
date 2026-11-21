@@ -39,8 +39,8 @@ function makeDeps(overrides = {}) {
     db: {
       query: rec('query', { rows: [] }),
       queryOne: rec('queryOne', (sql) =>
-        sql.includes('slug, options')
-          ? { slug: 'kashi', options: OPTIONS }
+        sql.includes('options')
+          ? { slug: 'kashi', title: 'Kashi Heritage Walk', options: OPTIONS }
           : { title: 'Kashi Heritage Walk', refund_policy: [{ daysBefore: 3, percent: 50 }], inclusions: [], exclusions: [] }
       ),
     },
@@ -113,7 +113,7 @@ test('discovery: "cheapest" uses the price-sorted listing and streams tokens', a
 test('discovery: nearby without a location asks for one instead of guessing', async () => {
   const r = await run({ question: 'what is near me?' });
   assert.equal(r.called('findNearby'), false);
-  assert.match(r.prompt, /share their location/);
+  assert.match(r.prompt, /Use my location/);
 });
 
 test('discovery: nearby with a location queries the DB with those coordinates', async () => {
@@ -158,10 +158,12 @@ test('booking: quote is read-only and server-computed', async () => {
   assert.ok(r.prompt.includes('2997.00'));
 });
 
-test('booking: missing seat count asks, does not quote', async () => {
+test('booking: no seat count -> prices ONE seat and says so, instead of asking', async () => {
   const r = await run({ question: 'I want to book this', context: { tourId: TOUR } });
-  assert.equal(r.called('quote'), false);
-  assert.match(r.prompt, /how many travellers/);
+  const quote = r.calls.find((c) => c.name === 'quote');
+  assert.equal(quote.args[0].seatCount, 1);
+  assert.match(r.prompt, /ONE seat is priced/);
+  assert.equal(uiBlocks(r).find((b) => b.type === 'quote').seatCount, 1);
 });
 
 test('booking: no tool in Phase 1 can hold seats, start checkout or take payment', async () => {
@@ -253,6 +255,7 @@ test('ui: quote block carries what the price-choices card needs', async () => {
   const q = uiBlocks(r).find((b) => b.type === 'quote');
   assert.equal(q.tourId, TOUR);
   assert.equal(q.slug, 'kashi');
+  assert.equal(q.tourTitle, 'Kashi Heritage Walk');
   assert.equal(q.seatCount, 3);
   assert.equal(q.totalAmount, '2997.00');
   assert.deepEqual(q.options, OPTIONS);

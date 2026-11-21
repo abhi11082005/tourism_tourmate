@@ -13,11 +13,13 @@ import { createLlm } from '../assistant/llm.js';
 import { buildTools } from '../assistant/tools/index.js';
 import { defaultDeps } from '../assistant/tools/deps.js';
 import { buildAssistantGraph } from '../assistant/graph.js';
+import { createTourResolver } from '../assistant/tourResolver.js';
 import {
   createConversation,
   getOwnedConversation,
   recentMessages,
   appendMessage,
+  setConversationTour,
 } from '../services/assistantConversations.service.js';
 
 export const assistantRouter = Router();
@@ -76,7 +78,14 @@ const clip = (s, n = 500) => (s.length > n ? s.slice(0, n) : s);
 let graphPromise;
 function getGraph() {
   graphPromise ??= defaultDeps()
-    .then((deps) => buildAssistantGraph({ tools: buildTools(deps), llm: createLlm() }))
+    .then((deps) =>
+      buildAssistantGraph({
+        tools: buildTools(deps),
+        llm: createLlm(),
+        resolveTour: createTourResolver({ db: deps.db }),
+        log: logger,
+      })
+    )
     .catch((err) => {
       graphPromise = undefined; // retry on the next request instead of caching a failure
       throw err;
@@ -125,6 +134,7 @@ assistantRouter.post(
     const history = (await recentMessages(conversation.id, HISTORY_TURNS)).map((m) => ({
       role: m.role,
       content: clip(m.content),
+      intent: m.intent ?? null, // lets "yes" / "what happens" carry on the previous topic
     }));
 
     await appendMessage({ conversationId: conversation.id, role: 'user', content: message });
@@ -148,7 +158,12 @@ assistantRouter.post(
         {
           question: message,
           history,
-          context: { tourId: tourId ?? null, user, location: location ?? null },
+          context: {
+            tourId: tourId ?? null,
+            user,
+            location: location ?? null,
+            focusTourId: conversation.tourId ?? null,
+          },
         },
         {
           configurable: {
@@ -157,6 +172,14 @@ assistantRouter.post(
           },
         }
       );
+
+      // Remember the tour this chat is now about, so the next message need not name it again.
+      const aboutTour = state.context?.tourId ?? null;
+      if (aboutTour && aboutTour !== conversation.tourId) {
+        await setConversationTour(conversation.id, aboutTour).catch((err) =>
+          logger.error({ err }, 'assistant: could not store conversation tour')
+        );
+      }
 
       await appendMessage({
         conversationId: conversation.id,

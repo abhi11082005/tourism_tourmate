@@ -17,7 +17,7 @@ export const llmConfigured = () => env.LLM_PROVIDER !== 'none' && Boolean(env.LL
  * @returns {{
  *   configured: boolean,
  *   completeJson: (messages: object[], opts?: { timeoutMs?: number }) => Promise<string>,
- *   stream: (messages: object[], opts: { onToken: (t: string) => void, signal?: AbortSignal }) => Promise<string>,
+ *   stream: (messages: object[], opts: { onToken: (t: string) => void, onFinish?: (reason: string) => void, signal?: AbortSignal }) => Promise<string>,
  * }}
  */
 export function createLlm() {
@@ -36,7 +36,7 @@ export function createLlm() {
       body: JSON.stringify({
         model: env.LLM_MODEL,
         messages,
-        max_tokens: 80,
+        max_tokens: 200,
         temperature: 0,
         response_format: { type: 'json_object' },
       }),
@@ -47,7 +47,7 @@ export function createLlm() {
   }
 
   /** Streams tokens through onToken and resolves with the full text. */
-  async function stream(messages, { onToken, signal }) {
+  async function stream(messages, { onToken, onFinish, signal }) {
     const upstream = await fetch(url, {
       method: 'POST',
       headers,
@@ -55,7 +55,9 @@ export function createLlm() {
       body: JSON.stringify({
         model: env.LLM_MODEL,
         messages,
-        max_tokens: 260,
+        // Generous on purpose. The reply is asked to be short, but models that think first
+        // count those tokens against this limit, and a tight cap left blank or cut-off answers.
+        max_tokens: 1200,
         temperature: 0.2,
         stream: true,
       }),
@@ -78,11 +80,13 @@ export function createLlm() {
         const payload = line.slice(5).trim();
         if (payload === '[DONE]') continue;
         try {
-          const token = JSON.parse(payload).choices?.[0]?.delta?.content;
+          const choice = JSON.parse(payload).choices?.[0];
+          const token = choice?.delta?.content;
           if (token) {
             full += token;
             onToken(token);
           }
+          if (choice?.finish_reason) onFinish?.(choice.finish_reason);
         } catch {
           // Partial JSON across chunk boundaries — the next read completes it.
         }

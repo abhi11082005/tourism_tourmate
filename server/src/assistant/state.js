@@ -14,7 +14,7 @@ export const AssistantState = Annotation.Root({
   question: Annotation(),
   /** [{ role: 'user' | 'assistant', content }] oldest first, already trimmed. */
   history: Annotation(),
-  /** { tourId: string|null, user: { id, role }|null, location: { lat, lng }|null } */
+  /** { tourId, user: { id, role }|null, location: { lat, lng }|null, focusTourId } — tourId is the tour on the page, focusTourId the one this conversation last discussed. */
   context: Annotation(),
   intent: Annotation(),
   /** Deterministic values pulled from the question: seatCount, maxPrice, dateRange... */
@@ -24,5 +24,7 @@ export const AssistantState = Annotation.Root({
     reducer: (left, right) => left.concat(right),
     default: () => [],
   }),
+  /** { tourId, slug, title } of the tour this turn is about (page, named in the message, or remembered). */
+  tour: Annotation(),
   answer: Annotation(),
 });

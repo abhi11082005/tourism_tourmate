@@ -29,7 +29,7 @@ const cleanSelection = (selected) =>
   Object.fromEntries(Object.entries(selected).filter(([, v]) => v !== false && v !== ''));
 
 export default function QuoteCard({ block }) {
-  const { tourId, slug, options = {}, dates = [] } = block;
+  const { tourId, slug, tourTitle, options = {}, dates = [] } = block;
   const { isGuest, status } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -111,6 +111,7 @@ export default function QuoteCard({ block }) {
 
   return (
     <section className="card space-y-3 p-3 text-sm" aria-label="Price estimate">
+      {tourTitle && <p className="font-medium">{tourTitle}</p>}
       <div>
         <p className="faint text-xs">Date</p>
         <div className="mt-1 flex flex-wrap gap-1.5">
