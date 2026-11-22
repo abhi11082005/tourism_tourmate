@@ -143,7 +143,7 @@ function Block({ block }) {
 export default function AssistantBlocks({ blocks }) {
   if (!blocks?.length) return null;
   return (
-    <div className="mt-2 space-y-2">
+    <div className="min-w-0 space-y-2">
       {blocks.map((b, i) => (
         <Block key={`${b.type}-${i}`} block={b} />
       ))}

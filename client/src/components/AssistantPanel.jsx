@@ -153,12 +153,12 @@ export default function AssistantPanel({ tourId, tourTitle }) {
 
   return (
     <section
-      className="card flex h-full flex-col p-4"
+      className="card flex h-full min-w-0 flex-col p-4 text-ink-900 shadow-xl dark:text-sand-50"
       aria-label={tourId ? 'Ask the expert' : 'TourMate assistant'}
     >
       <header className="mb-3">
-        <h3 className="text-sm font-semibold">{tourId ? 'Ask the expert' : 'TourMate assistant'}</h3>
-        <p className="text-xs text-sand-500">
+        <h3 className="pr-8 text-sm font-semibold">{tourId ? 'Ask the expert' : 'TourMate assistant'}</h3>
+        <p className="faint text-xs">
           {tourId
             ? `Answers come from ${tourTitle}'s own itinerary, prices and live seat counts.`
             : 'Find tours, check offers and see what is near you.'}
@@ -167,7 +167,7 @@ export default function AssistantPanel({ tourId, tourTitle }) {
 
       <div
         ref={scrollRef}
-        className="min-h-40 flex-1 space-y-3 overflow-y-auto pr-1"
+        className="min-h-40 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1"
         aria-live="polite"
         aria-busy={streaming}
       >
@@ -181,27 +181,35 @@ export default function AssistantPanel({ tourId, tourTitle }) {
           </div>
         )}
 
-        {messages.map((m, i) => (
-          <article
-            key={i}
-            className={`max-w-[90%] rounded-2xl px-3 py-2 text-sm ${
-              m.role === 'user' ? 'ml-auto bg-ink-800 text-sand-50' : 'bg-sand-50 text-ink-800'
-            }`}
-          >
-            {m.text || (streaming && i === messages.length - 1 ? (
-              <ThinkingDots />
-            ) : null)}
-            <AssistantBlocks blocks={m.blocks} />
-            {m.role === 'assistant' && m.sources?.length > 0 && (
-              <p className="mt-2 text-[11px] text-sand-500">
-                from: {m.sources.map((s) => s.ref ?? s.kind).join(', ')}
-              </p>
-            )}
-          </article>
-        ))}
+        {messages.map((m, i) => {
+          const isUser = m.role === 'user';
+          const waiting = !m.text && streaming && i === messages.length - 1;
+          return (
+            <div key={i} className="min-w-0 space-y-2">
+              {(m.text || waiting) && (
+                <article
+                  className={`max-w-[90%] break-words rounded-2xl px-3 py-2 text-sm ${
+                    isUser
+                      ? 'ml-auto bg-ink-800 text-sand-50 dark:bg-sand-300 dark:text-ink-900'
+                      : 'bg-sand-100 text-ink-900 dark:bg-ink-800 dark:text-sand-50'
+                  }`}
+                >
+                  {m.text || <ThinkingDots />}
+                  {m.role === 'assistant' && m.sources?.length > 0 && (
+                    <p className="faint mt-2 text-[11px]">
+                      from: {m.sources.map((s) => s.ref ?? s.kind).join(', ')}
+                    </p>
+                  )}
+                </article>
+              )}
+              {/* Cards (prices, dates, tours) sit under the text at full width, on the panel itself. */}
+              {m.blocks?.length > 0 && <AssistantBlocks blocks={m.blocks} />}
+            </div>
+          );
+        })}
       </div>
 
-      {error && <p className="mt-2 rounded-xl bg-red-50 p-2 text-xs text-red-700">{error}</p>}
+      {error && <p className="notice-error mt-2 !p-2 !text-xs" role="alert">{error}</p>}
 
       <div className="mt-3 flex items-center justify-between gap-2 text-xs">
         {shared ? (

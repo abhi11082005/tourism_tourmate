@@ -17,6 +17,11 @@
   }
   
   /* Dark mode overrides */
+  /* Native select menus, scrollbars and checkboxes follow the central theme too; without
+     this they stay light inside a dark chat. */
+  .dark {
+    color-scheme: dark;
+  }
   .dark body {
     @apply bg-ink-900 text-white;
   }

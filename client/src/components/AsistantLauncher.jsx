@@ -239,7 +239,7 @@ export default function AssistantLauncher({ tourId, tourTitle }) {
           onClick={() => setOpen(false)}
           aria-label="Close chat"
           tabIndex={open ? 0 : -1}
-          className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full text-lg leading-none text-sand-500 hover:bg-white/10"
+          className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full text-lg leading-none text-ink-700 hover:bg-sand-100 dark:text-sand-300 dark:hover:bg-ink-700"
         >
           ×
         </button>
@@ -255,7 +255,7 @@ export default function AssistantLauncher({ tourId, tourTitle }) {
         aria-expanded={open}
         aria-controls="assistant-popup"
         aria-label={open ? `Close ${label.toLowerCase()}` : label}
-        className="h-full w-full cursor-grab touch-none select-none overflow-hidden rounded-full shadow-lg ring-1 ring-white/10 transition-shadow hover:shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-sand-500 active:cursor-grabbing"
+        className="h-full w-full cursor-grab touch-none select-none overflow-hidden rounded-full shadow-lg ring-1 ring-ink-900/10 transition-shadow dark:ring-white/10 hover:shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-sand-500 active:cursor-grabbing"
       >
         <img
           src={ICON_SRC}

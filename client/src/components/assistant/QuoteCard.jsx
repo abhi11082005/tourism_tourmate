@@ -110,21 +110,28 @@ export default function QuoteCard({ block }) {
     }
   }
 
+  const chipOn = 'border-ink-800 bg-ink-800 text-sand-50 dark:border-sand-300 dark:bg-sand-300 dark:text-ink-900';
+  const row = 'flex min-h-9 items-center justify-between gap-3';
+
   return (
     <section
-      className={`card space-y-3 p-3 text-sm transition-opacity ${holding ? 'pointer-events-none opacity-70' : ''}`}
+      className={`card min-w-0 divide-y divide-sand-100 overflow-hidden text-sm text-ink-900 transition-opacity dark:divide-ink-700 dark:text-sand-50 ${holding ? 'pointer-events-none opacity-70' : ''}`}
       aria-label="Price estimate"
       aria-busy={holding}
     >
-      {tourTitle && <p className="font-medium">{tourTitle}</p>}
-      <div>
+      <header className="space-y-0.5 p-3">
+        <p className="faint text-[11px] font-semibold uppercase tracking-wide">Price estimate</p>
+        {tourTitle && <p className="font-semibold leading-snug">{tourTitle}</p>}
+      </header>
+
+      <div className="space-y-1.5 p-3">
         <p className="faint text-xs">Date</p>
-        <div className="mt-1 flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           <button
             type="button"
             aria-pressed={slotId === null}
             onClick={() => pickDate(null)}
-            className={`chip min-h-9 ${slotId === null ? 'bg-ink-800 text-sand-50 dark:bg-sand-300 dark:text-ink-900' : ''}`}
+            className={`chip min-h-9 ${slotId === null ? chipOn : ''}`}
           >
             Any date
           </button>
@@ -138,9 +145,7 @@ export default function QuoteCard({ block }) {
                 aria-pressed={active}
                 disabled={full}
                 onClick={() => pickDate(d)}
-                className={`chip min-h-9 disabled:opacity-40 ${
-                  active ? 'bg-ink-800 text-sand-50 dark:bg-sand-300 dark:text-ink-900' : ''
-                }`}
+                className={`chip min-h-9 disabled:opacity-40 ${active ? chipOn : ''}`}
               >
                 {shortDate(d.date)} · {d.seatsLeft} left
               </button>
@@ -149,128 +154,137 @@ export default function QuoteCard({ block }) {
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <span className="faint text-xs">Seats</span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="btn-ghost !min-h-9 !px-3"
-            aria-label="Fewer seats"
-            disabled={seatCount <= 1}
-            onClick={() => change(() => setSeatCount((n) => Math.max(1, n - 1)))}
-          >
-            −
-          </button>
-          <output className="w-6 text-center font-semibold" aria-live="polite">
-            {seatCount}
-          </output>
-          <button
-            type="button"
-            className="btn-ghost !min-h-9 !px-3"
-            aria-label="More seats"
-            disabled={seatCount >= seatCap}
-            onClick={() => change(() => setSeatCount((n) => Math.min(seatCap, n + 1)))}
-          >
-            +
-          </button>
+      <div className="space-y-1 p-3">
+        <div className={row}>
+          <span className="faint text-xs">Seats</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-ghost !min-h-9 !px-3"
+              aria-label="Fewer seats"
+              disabled={seatCount <= 1}
+              onClick={() => change(() => setSeatCount((n) => Math.max(1, n - 1)))}
+            >
+              −
+            </button>
+            <output className="w-6 text-center font-semibold" aria-live="polite">
+              {seatCount}
+            </output>
+            <button
+              type="button"
+              className="btn-ghost !min-h-9 !px-3"
+              aria-label="More seats"
+              disabled={seatCount >= seatCap}
+              onClick={() => change(() => setSeatCount((n) => Math.min(seatCap, n + 1)))}
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        {Object.entries(options).map(([key, spec]) => {
+          if (spec.type === 'boolean') {
+            return (
+              <label key={key} className={`${row} cursor-pointer`}>
+                <span className="min-w-0">
+                  <span className="block">{spec.label ?? key}</span>
+                  {spec.pricePerSeat ? (
+                    <span className="faint block text-xs">+{inr(spec.pricePerSeat)} per seat</span>
+                  ) : null}
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 shrink-0 accent-ink-800 dark:accent-sand-300"
+                  checked={selected[key] === true}
+                  onChange={(e) => change(() => setSelected((s) => ({ ...s, [key]: e.target.checked })))}
+                />
+              </label>
+            );
+          }
+          if (spec.type === 'enum') {
+            return (
+              <label key={key} className={row}>
+                <span className="faint shrink-0 text-xs">{spec.label ?? key}</span>
+                <select
+                  className="field !min-h-9 !w-auto min-w-0 max-w-[65%] truncate !py-1"
+                  value={selected[key] ?? spec.default ?? ''}
+                  onChange={(e) => change(() => setSelected((s) => ({ ...s, [key]: e.target.value })))}
+                >
+                  {(spec.choices ?? []).map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label ?? c.value}
+                      {c.pricePerSeat ? ` (+${inr(c.pricePerSeat)} per seat)` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            );
+          }
+          return null;
+        })}
+      </div>
+
+      <div className="space-y-2 p-3">
+        <ul className="space-y-0.5">
+          {quote.lines.map((l) => (
+            <li key={l.key} className="flex justify-between gap-3">
+              <span className="muted min-w-0">{l.label}</span>
+              <span className="shrink-0">{inr(l.amount)}</span>
+            </li>
+          ))}
+        </ul>
+        <div
+          className="flex items-center justify-between gap-3 rounded-xl bg-sand-100 px-3 py-2 dark:bg-ink-800"
+          aria-live="polite"
+          aria-busy={busy}
+        >
+          <span className="font-semibold">Total</span>
+          <span className={`text-lg font-bold ${busy ? 'opacity-50' : ''}`}>{inr(quote.total)}</span>
         </div>
       </div>
 
-      {Object.entries(options).map(([key, spec]) => {
-        if (spec.type === 'boolean') {
-          return (
-            <label key={key} className="flex min-h-9 items-center justify-between gap-3">
-              <span>
-                {spec.label ?? key}
-                {spec.pricePerSeat ? (
-                  <span className="faint"> · +{inr(spec.pricePerSeat)} per seat</span>
-                ) : null}
+      <div className="space-y-2 p-3">
+        {error && <p className="notice-error">{error}</p>}
+
+        {holding && (
+          <p className="faint text-center text-xs" role="status">
+            Your seats are being held. Taking you to secure payment…
+          </p>
+        )}
+
+        {holdError && <p className="notice-error" role="alert">{holdError}</p>}
+
+        {isGuest && status !== 'restoring' ? (
+          <Link to="/login" state={{ from: location }} className="btn-primary w-full">
+            Sign in to hold seats
+          </Link>
+        ) : (
+          <button
+            type="button"
+            className="btn-primary w-full"
+            onClick={holdSeats}
+            disabled={!slotId || holding || busy || status === 'restoring'}
+            aria-busy={holding}
+          >
+            {holding ? (
+              <span className="inline-flex items-center justify-center gap-2">
+                <Spinner /> Securing your seats…
               </span>
-              <input
-                type="checkbox"
-                className="h-5 w-5"
-                checked={selected[key] === true}
-                onChange={(e) => change(() => setSelected((s) => ({ ...s, [key]: e.target.checked })))}
-              />
-            </label>
-          );
-        }
-        if (spec.type === 'enum') {
-          return (
-            <label key={key} className="flex items-center justify-between gap-3">
-              <span>{spec.label ?? key}</span>
-              <select
-                className="field !min-h-9 !w-auto"
-                value={selected[key] ?? spec.default ?? ''}
-                onChange={(e) => change(() => setSelected((s) => ({ ...s, [key]: e.target.value })))}
-              >
-                {(spec.choices ?? []).map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label ?? c.value}
-                    {c.pricePerSeat ? ` (+${inr(c.pricePerSeat)} per seat)` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          );
-        }
-        return null;
-      })}
+            ) : slotId ? (
+              'Hold seats for 10 minutes'
+            ) : (
+              'Pick a date to hold seats'
+            )}
+          </button>
+        )}
 
-      <ul className="space-y-0.5 border-t border-sand-100 pt-2 dark:border-ink-600">
-        {quote.lines.map((l) => (
-          <li key={l.key} className="flex justify-between gap-3">
-            <span className="muted">{l.label}</span>
-            <span>{inr(l.amount)}</span>
-          </li>
-        ))}
-      </ul>
-
-      <div className="flex items-center justify-between gap-3" aria-live="polite" aria-busy={busy}>
-        <span className="font-semibold">Total</span>
-        <span className={`text-base font-bold ${busy ? 'opacity-50' : ''}`}>{inr(quote.total)}</span>
-      </div>
-
-      {error && <p className="notice-error">{error}</p>}
-
-      {holding && (
-        <p className="faint text-center text-xs" role="status">
-          Your seats are being held. Taking you to secure payment…
-        </p>
-      )}
-
-      {holdError && <p className="notice-error" role="alert">{holdError}</p>}
-
-      {isGuest && status !== 'restoring' ? (
-        <Link to="/login" state={{ from: location }} className="btn-primary w-full">
-          Sign in to hold seats
+        <Link to={slug ? `/tours/${slug}` : '/explore'} className="btn-ghost w-full text-center">
+          Continue on the tour page
         </Link>
-      ) : (
-        <button
-          type="button"
-          className="btn-primary w-full"
-          onClick={holdSeats}
-          disabled={!slotId || holding || busy || status === 'restoring'}
-          aria-busy={holding}
-        >
-          {holding ? (
-            <span className="inline-flex items-center justify-center gap-2">
-              <Spinner /> Securing your seats…
-            </span>
-          ) : slotId ? (
-            'Hold seats for 10 minutes'
-          ) : (
-            'Pick a date to hold seats'
-          )}
-        </button>
-      )}
-
-      <Link to={slug ? `/tours/${slug}` : '/explore'} className="btn-ghost w-full text-center">
-        Continue on the tour page
-      </Link>
-      <p className="faint text-center text-[11px]">
-        Holding is free and you pay on the next screen. Coupons and offers are applied on the tour page.
-      </p>
+        <p className="faint text-center text-[11px]">
+          Holding is free and you pay on the next screen. Coupons and offers are applied on the tour page.
+        </p>
+      </div>
     </section>
   );
 }
