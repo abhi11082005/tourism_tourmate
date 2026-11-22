@@ -74,6 +74,7 @@ function notes(results) {
     if (d.dateProblem) out.push(`The date they gave is not usable: ${d.dateProblem.message} Ask for a valid upcoming date.`);
     if (d.needsDay) out.push(`They said a weekend, which is two days (${d.needsDay.join(' and ')}). Ask which day they want before giving a price.`);
     if (d.dateAssumed) out.push('No travel date was chosen, so the price shown is the standard price; a date can add a surcharge. They can pick a date on the card.');
+    if (d.campaign) out.push(`A live offer "${d.campaign.name}" (${d.campaign.percent}% off) applies automatically when they hold seats: it saves ${d.campaign.saves}, so they pay ${d.campaign.payable} instead of ${d.totalAmount}. Mention it; the card shows the discounted total.`);
     if (d.allSoldOut) out.push('Every open date in this window is sold out; say so and suggest another window or tour.');
     if (d.dates?.some((x) => x.soldOut) && !d.allSoldOut) out.push('Dates with soldOut true have zero seats left.');
     if (d.couponsListed === false) out.push('Coupon codes are not listed publicly. If they ask about coupons, mention the offers above and say they can type a code to check it.');

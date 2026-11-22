@@ -57,12 +57,20 @@ export function bookingTools(deps) {
         }
 
         const q = await deps.booking.quote({ tourId: ctx.tourId, slotId: slot?.slotId, seatCount });
+        // Best live campaign (the list is ordered deepest first); a failing lookup just means no offer.
+        const campaign = (await deps.offers.activeCampaigns().catch(() => []))?.[0] ?? null;
+        const saves = campaign ? Math.floor((Number(q.totalAmount) * campaign.discountPercent) / 100) : 0;
         return {
           data: {
             tour: tourRow?.title ?? null,
             seatCount,
             seatCountAssumed,
             date: slot?.date ?? null,
+            // The live festival campaign, priced by the same floor rule checkout uses. The card applies it
+            // when the traveller holds seats, so the sentence and the card say the same thing.
+            campaign: campaign && saves > 0
+              ? { name: campaign.name, percent: campaign.discountPercent, saves, payable: String(Number(q.totalAmount) - saves) }
+              : null,
             // No date chosen yet: this is the standard price; a date can add a surcharge.
             dateAssumed: !slot,
             totalAmount: q.totalAmount,

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../../lib/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { inr, shortDate } from '../../lib/format.js';
 import Spinner from '../Spinner.jsx';
+import { useActiveCampaign } from '../../hooks/useActiveCampaign.js';
+import { computeDeal } from '../../lib/campaign.js';
 
 /*
  * Price choices inside the chat: date, seats and the tour's options.
@@ -16,12 +19,15 @@ import Spinner from '../Spinner.jsx';
  * The first quote arrives with the message, so no request is made until the
  * traveller actually changes something.
  *
+ * A live festival campaign is applied the way the tour page applies it: the original total is
+ * shown struck through, the campaign discount as its own line, and the same campaign id is sent
+ * with the hold, where the server re-checks that it is still running and does the real maths.
+ *
  * "Hold seats" is the one action here, and it is the traveller's click — never the
  * model's. It calls the same POST /bookings/checkout the tour page uses (signed-in
  * only, rate-limited, seats held 10 minutes) and then goes to the existing
- * /checkout page where payment happens. A hold from here is at the standard price:
- * coupons and campaigns are priced into the hold on the tour page, so that link
- * stays right beside it.
+ * /checkout page where payment happens. Coupon codes are entered on the tour page, so
+ * that link stays right beside it.
  */
 
 const MAX_SEATS = 20;
@@ -32,6 +38,8 @@ const cleanSelection = (selected) =>
 export default function QuoteCard({ block }) {
   const { tourId, slug, tourTitle, options = {}, dates = [] } = block;
   const { isGuest, status } = useAuth();
+  const qc = useQueryClient();
+  const { primary: campaign } = useActiveCampaign();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -46,6 +54,10 @@ export default function QuoteCard({ block }) {
   const [holdError, setHoldError] = useState(null);
   const [soldOut, setSoldOut] = useState(() => new Set()); // slot ids the server said are gone
   const holdingRef = useRef(false); // synchronous guard: two fast taps must send one request
+
+  // Same rule the server uses (floor of the percentage), so this is what will be charged.
+  const deal = campaign ? computeDeal(quote.total, campaign.discountPercent) : null;
+  const payable = deal ? deal.discounted : quote.total;
 
   const chosenDate = dates.find((d) => d.slotId === slotId);
   const seatCap = Math.min(MAX_SEATS, chosenDate?.seatsLeft ?? MAX_SEATS);
@@ -95,7 +107,12 @@ export default function QuoteCard({ block }) {
     try {
       // Exactly what the quote above was priced with, so the held total is the
       // total the traveller saw. No coupon, no campaign (see the note up top).
-      const res = await api.checkout({ slotId, seatCount, selectedOptions: cleanSelection(selected) });
+      const res = await api.checkout({
+        slotId,
+        seatCount,
+        selectedOptions: cleanSelection(selected),
+        ...(deal && campaign?.id ? { campaignId: campaign.id } : {}),
+      });
       navigate(`/checkout/${res.bookingId}`);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -104,7 +121,13 @@ export default function QuoteCard({ block }) {
         setSlotId(null);
         touched.current = true;
       }
-      setHoldError(err.message ?? 'Could not hold those seats');
+      if (/campaign/i.test(err.message ?? '')) {
+        // The offer ended while the chat was open: refresh it so the price shown is honest again.
+        qc.invalidateQueries({ queryKey: ['campaigns', 'active'] });
+        setHoldError('That offer has just ended, so the price has changed. Please check the total and try again.');
+      } else {
+        setHoldError(err.message ?? 'Could not hold those seats');
+      }
       holdingRef.current = false;
       setHolding(false);
     }
@@ -232,6 +255,14 @@ export default function QuoteCard({ block }) {
               <span className="shrink-0">{inr(l.amount)}</span>
             </li>
           ))}
+          {deal && (
+            <li className="flex justify-between gap-3 font-medium text-emerald-700 dark:text-emerald-300">
+              <span className="min-w-0">
+                {campaign.name ?? 'Festival offer'} · {deal.percent}% off
+              </span>
+              <span className="shrink-0">−{inr(deal.saved)}</span>
+            </li>
+          )}
         </ul>
         <div
           className="flex items-center justify-between gap-3 rounded-xl bg-sand-100 px-3 py-2 dark:bg-ink-800"
@@ -239,7 +270,12 @@ export default function QuoteCard({ block }) {
           aria-busy={busy}
         >
           <span className="font-semibold">Total</span>
-          <span className={`text-lg font-bold ${busy ? 'opacity-50' : ''}`}>{inr(quote.total)}</span>
+          <span className={`flex items-baseline gap-2 ${busy ? 'opacity-50' : ''}`}>
+            {deal && <span className="faint text-xs tabular-nums line-through">{inr(quote.total)}</span>}
+            <span className={`text-lg font-bold tabular-nums ${deal ? 'text-emerald-700 dark:text-emerald-300' : ''}`}>
+              {inr(payable)}
+            </span>
+          </span>
         </div>
       </div>
 
@@ -282,7 +318,7 @@ export default function QuoteCard({ block }) {
           Continue on the tour page
         </Link>
         <p className="faint text-center text-[11px]">
-          Holding is free and you pay on the next screen. Coupons and offers are applied on the tour page.
+          Holding is free and you pay on the next screen. Have a coupon code? Enter it on the tour page.
         </p>
       </div>
     </section>

@@ -229,9 +229,14 @@ test('graph: a past date is refused with a reason', async () => {
   assert.equal(r.blocks.length, 0, 'no price card for a date in the past');
 });
 
-test('graph: "book for this weekend" asks which day instead of silently picking Saturday', async () => {
+test('graph: "book for this weekend" asks which day when the weekend still has two days', async () => {
+  const w = resolveDateRange('this weekend'); // real clock: on a Sunday only today is left
   const g = graphWith();
   const r = await ask(g, 'I want to book this weekend');
+  if (w.from === w.to) {
+    assert.notEqual(r.state.toolResults[0].missing, 'travelDate', 'one day left: nothing to choose between');
+    return;
+  }
   assert.equal(r.state.toolResults[0].status, STATUS.NEEDS_INPUT);
   assert.equal(r.state.toolResults[0].missing, 'travelDate');
   assert.match(g.prompts[0], /Ask which day/);
@@ -261,6 +266,23 @@ test('graph: no price without a date is labelled as the standard price', async (
   assert.equal(r.state.toolResults[0].data.dateAssumed, true);
   assert.match(g.prompts[0], /standard price/);
   assert.equal(r.state.memory.passengerCount, 2);
+});
+
+test('graph: a live campaign is priced with the checkout rule and mentioned to the model', async () => {
+  const g = graphWith({ offers: { activeCampaigns: async () => [{ id: 7, name: 'Diwali Dhamaka', discountPercent: 15 }], validateCoupon: async () => ({}) } });
+  const r = await ask(g, 'what is the final price for 3 people');
+  const c = r.state.toolResults[0].data.campaign;
+  assert.deepEqual(c, { name: 'Diwali Dhamaka', percent: 15, saves: 450, payable: '2550' }); // floor(3000*15/100)
+  assert.match(g.prompts[0], /Diwali Dhamaka.*15% off.*pay 2550 instead of 3000/);
+});
+
+test('graph: no campaign, or a failing campaign lookup, leaves the price untouched', async () => {
+  const none = graphWith();
+  assert.equal((await ask(none, 'final price')).state.toolResults[0].data.campaign, null);
+  const broken = graphWith({ offers: { activeCampaigns: async () => { throw new Error('db down'); }, validateCoupon: async () => ({}) } });
+  const r = await ask(broken, 'final price');
+  assert.equal(r.state.toolResults[0].data.campaign, null);
+  assert.equal(r.state.toolResults[0].ok, true);
 });
 
 test('graph: Redis/database outage is reported as unavailable, not as "checking"', async () => {
