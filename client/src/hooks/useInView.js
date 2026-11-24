@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 /*
  * Flips to true the first time `ref`'s element comes within `rootMargin` of the
- * viewport, then stays true. Used to defer heavy children (the MapLibre canvas, the
+ * viewport, then stays true. Used to defer heavy children (the Google map, the
  * review thread's request) until the reader actually scrolls to them.
  */
 export function useInView(ref, { rootMargin = '200px 0px' } = {}) {

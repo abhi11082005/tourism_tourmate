@@ -5,8 +5,9 @@ only at the payment step, and hold your seats in Redis while you pay.
 
 Node.js + Express for the API, PostgreSQL reached through **raw SQL over `pg`**
 (no ORM anywhere — PostGIS, pgvector and JSONB are used directly), Redis for
-atomic seat locks, OSRM + OpenStreetMap for routing, and React + Vite +
-Tailwind + MapLibre GL on the front end.
+atomic seat locks, OSRM + OpenStreetMap for mood routing, Google Maps Platform
+(Maps JavaScript API, Places API New, Routes API) for the map, nearby discovery and
+road distances, and React + Vite + Tailwind on the front end.
 
 ## Quick start
 
@@ -15,7 +16,7 @@ prerequisites, Windows commands, demo logins and a troubleshooting table.
 
 ```bash
 cp .env.example server/.env          # then paste in a generated JWT_SECRET
-cp client/.env.example client/.env   # no map key needed
+cp client/.env.example client/.env   # add your Google keys, see "Google Maps setup"
 
 docker compose up -d db cache        # Postgres+PostGIS+pgvector, Redis
 
@@ -84,13 +85,25 @@ the first token sits in a buffer; and the client accumulates tokens in a ref and
 flushes once per `requestAnimationFrame`, because calling `setState` 200 times is
 what makes a streaming answer stutter.
 
-**The map never blocks the main thread.** Pins are a single memoised GeoJSON
-source drawn by two GPU circle layers — not DOM markers, which is what turns a
-pan into a layout storm at a few hundred pins. Pin updates go through
-`source.setData()` rather than a fresh map, only the selected pin becomes a DOM
-popup, the viewport query fires on `moveend` and never during the gesture, and
-MapLibre GL is a lazy chunk so the tour list stays interactive while ~900kB
-downloads.
+**The map never blocks the main thread.** Pins are AdvancedMarkerElements built from
+plain DOM nodes and handed to a `MarkerClusterer`, so a dense city collapses into a
+few cluster bubbles instead of hundreds of live markers. Updates are diffed by id
+(only added or removed pins are touched), selection only restyles the two affected
+nodes, there is exactly one map instance per mount (a light/dark switch is the only
+reason to rebuild it — Google fixes `colorScheme` at construction), viewport queries
+fire on `idle`, never during the gesture, and the Maps loader is a lazy chunk so the
+tour list stays interactive.
+
+**Explore keeps two kinds of place apart.** Curated TourMate attractions come from
+PostGIS (`/attractions/nearby`, `/attractions/pins`). External discoveries come from
+Google Places API (New) through the server (`/places/*`), only after the visitor
+opts in (shares location, explores around a place, or asks), are never stored, and
+are always badged "Google Places". Google results that duplicate a curated place
+(close coordinates *and* matching name) are dropped in favour of ours. Two distances
+are never mixed up: "450 m away" is a straight line (PostGIS / great-circle) and
+"650 m · 9 min walk" exists only after Routes API computed it. A remembered or
+fallback position is always labelled approximate; only a GPS fix this tab took is
+ever called "your location", and it lives in component state only.
 
 **Guest mode is the default, and login happens once.** `AuthContext` treats "no
 token" as a normal state rather than an error, so browsing, configuring a
@@ -119,24 +132,73 @@ server/src/
   app.js index.js     assembly, health check, graceful shutdown
   config/ db/         env validation; pg pool + Redis (with the Lua hold script)
   middleware/         asyncHandler, zod validate, auth, error mapping
-  routes/             auth tours attractions bookings social routing assistant admin
-  services/           booking, pricing, tours, attractions, social, osrm, rag
+  routes/             auth tours attractions bookings social routing places assistant admin
+  services/           booking, pricing, tours, attractions, social, osrm, google, places, rag
   workers/            seat-expiry reconciliation
 server/scripts/       migrate.js, buildEmbeddings.js
 client/src/
   pages/              Home TourDetail Explore Checkout Login MyBookings Wishlist Admin
-  components/         MapCanvas SeatCalendar PriceConfigurator AssistantPanel ReviewThread
-  context/ hooks/ lib/  auth state, countdown, geolocation, api client
+  components/         MapCanvas (Google map, shared) explore/* SeatCalendar PriceConfigurator ...
+  context/ hooks/ lib/  auth state, geolocation, useGoogleMap, googleMaps loader, mapMarkers, discovery, api client
 ```
+
+## Google Maps setup
+
+Google Maps Platform is a **paid, usage-billed** service (with a monthly free
+allowance). Without keys the app still runs: the map area shows a clear "not
+configured" message, curated pins and lists still load, and `/api/places/*` answers
+`503 GOOGLE_NOT_CONFIGURED`.
+
+Enable these APIs in one Google Cloud project, with billing on:
+
+| API | Used for | Key |
+| --- | --- | --- |
+| Maps JavaScript API | the map itself | **browser** key |
+| Places API (New) | nearby discovery, search, details, photos | **server** key |
+| Routes API (includes Route Matrix) | road distance / time, route line | **server** key |
+
+Create **two** keys:
+
+- **Browser key** → `VITE_GOOGLE_MAPS_API_KEY` in `client/.env`. It is public by
+  design, so restrict it: *HTTP referrers* (`http://localhost:5173/*`, your
+  production domain) and *API restriction* = Maps JavaScript API only.
+- **Server key** → `GOOGLE_MAPS_SERVER_API_KEY` in `server/.env` (or the repo-root
+  `.env`). Never put it in `client/`. Restrict it to Places API (New) + Routes API,
+  and to your server's egress IPs where your host has stable ones.
+
+Optionally set `VITE_GOOGLE_MAPS_MAP_ID` to your own **Vector** Map ID (Cloud
+Console → Map Management); otherwise Google's `DEMO_MAP_ID` is used, which is fine
+for development.
+
+Cost controls built in: explicit field masks (no reviews/phone/website on list
+calls), a ~110 m cache grid and a short server cache (`PLACES_CACHE_TTL_SECONDS`),
+React Query stale times, debounced viewport queries, per-IP rate limits, aborted
+requests are cancelled upstream, ≤ 12 results per category, and Route Matrix only
+runs when the traveller asks for travel times (≤ 10 destinations).
+
+Google content is not stored in the database. Only TourMate's own attractions are.
+
+### Deploying
+
+- **Vercel (client).** Add `VITE_GOOGLE_MAPS_API_KEY` (and optionally
+  `VITE_GOOGLE_MAPS_MAP_ID`) under Project → Settings → Environment Variables, then
+  redeploy — Vite bakes `VITE_*` values in at build time. Add the Vercel domain(s)
+  to the browser key's referrer list, including preview URLs if you use them. Set
+  `VITE_API_BASE_URL` to the Railway API URL.
+- **Railway (API).** Add `GOOGLE_MAPS_SERVER_API_KEY` (and, if you like,
+  `PLACES_CACHE_TTL_SECONDS`) to the service's Variables. Set `CORS_ORIGIN` to the
+  Vercel origin. Railway egress IPs are not stable on the default plan, so an IP
+  restriction may not be possible there; rely on the API restriction, keep the key
+  server-only and set a quota/budget alert in Google Cloud.
 
 ## Free-tier choices
 
-The map costs nothing and needs no account: MapLibre GL renders OpenFreeMap's
-OpenStreetMap tiles, so there is no token to provision, no per-load billing and
-no rate limit to design around. `VITE_MAP_STYLE` points it at any other
-MapLibre-compatible style JSON, self-hosted included. The LLM is a free-tier Groq
-or Google AI Studio key, Postgres/Redis/OSRM are self-hosted, and user media goes
-to a Cloudinary or S3 free tier with only the URL stored in the database.
+Maps, Places and Routes are Google services and are billed by usage — set a budget
+alert and per-API quotas in Cloud Console. Everything else stays on free or
+self-hosted tiers: the LLM is a free-tier Groq or Google AI Studio key,
+Postgres/Redis/OSRM are self-hosted (OSRM still powers Personal and Guided Tour
+Mode), and user media goes to a Cloudinary or S3 free tier with only the URL stored
+in the database.
 
 ## Verification
 
@@ -144,7 +206,7 @@ What was run here:
 
 ```bash
 cd server && npm run check      # parses every src/ and scripts/ file
-cd server && npm test           # 8 pricing tests, all passing
+cd server && npm test           # pricing + Google Places/Routes tests (Google mocked)
 cd client && npm run check      # brackets, JSX tag balance, import graph, api surface
 ```
 

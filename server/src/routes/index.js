@@ -12,6 +12,7 @@ import { supportRouter } from './support.routes.js';
 import { adminRouter } from './admin.routes.js';
 import { campaignRouter } from './campaigns.routes.js';
 import { spotlightRouter } from './spotlight.routes.js'; // Added the new spotlight router
+import { placesRouter } from './places.routes.js';
 
 export const apiRouter = Router();
 
@@ -33,6 +34,7 @@ apiRouter.use('/social', socialRouter); // Note: Should have internal checks to 
 apiRouter.use('/campaigns', campaignRouter); // Note: Should restrict to /campaigns/active for guests
 apiRouter.use('/assistant', assistantRouter);
 apiRouter.use('/routing', routingRouter);
+apiRouter.use('/places', placesRouter); // Google Places discovery + Route Matrix; guests allowed
 
 /*
  * 2. AUTHENTICATION (Public / Session Management)

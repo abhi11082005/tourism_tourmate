@@ -1,166 +1,61 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { LngLatBounds, Map as MapLibreMap, Marker, NavigationControl, Popup } from 'maplibre-gl';
+import { memo, useEffect, useMemo, useRef } from 'react';
+import { MarkerClusterer } from '@googlemaps/markerclusterer';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { useGoogleMap } from '../hooks/useGoogleMap.js';
+import { mapsErrorMessage } from '../lib/googleMaps.js';
+import {
+  createClusterContent,
+  createDraftContent,
+  createPinContent,
+  createStopContent,
+  createUserContent,
+  setPinSelected,
+  setStopSelected,
+  styleFor,
+} from '../lib/mapMarkers.js';
 
 /*
- * The one place MapLibre GL is touched.
+ * The one place Google Maps is touched for display maps (Explore, tour itinerary,
+ * admin pin manager).
  *
- * Why there is no react-map-gl here: that wrapper reaches inside the map and
- * assigns `map.painter.transform`, then clones `map.transform`. MapLibre v5
- * replaced the transform with a pluggable `ITransform` (globe/mercator), so
- * react-map-gl@7 + maplibre-gl@6 crashes on the first render. Driving the map
- * directly is ~60 lines more and removes the whole compatibility question.
+ * Marker strategy, because "map must not freeze the UI" is a standing requirement:
+ *  - Attraction pins are AdvancedMarkerElements built from plain DOM nodes and fed to
+ *    a MarkerClusterer, so a dense city collapses into a few cluster bubbles instead
+ *    of hundreds of live DOM markers. Updates are diffed by id — only added or
+ *    removed pins are touched — and selection only restyles the two affected nodes.
+ *  - Numbered itinerary stops (a handful per tour) are plain AdvancedMarkers.
+ *  - The map is created once. Props are read through `latest`, so inline callbacks
+ *    from parents never rebuild it. (A light/dark switch does, by necessity:
+ *    Google's colorScheme is fixed at construction. See useGoogleMap.)
+ *  - Exactly one InfoWindow exists, reused across selections.
+ *  - Bounds are read on `idle` (after a gesture settles), never per frame.
+ *  - Route geometry arrives already simplified from OSRM / Google Routes.
  *
- * Also note maplibre-gl v6 ships named exports only — `import maplibregl from
- * 'maplibre-gl'` gives you `undefined`, which surfaces later as
- * "Cannot read properties of undefined (reading 'Map')".
- *
- * Main-thread rules this file follows, because "map must not freeze the UI" is
- * a hard requirement:
- *  - Attraction pins render as a GPU-drawn circle+glow layer fed by one GeoJSON
- *    source, not as hundreds of DOM markers. DOM markers are repositioned in JS
- *    on every frame of a pan; a layer is drawn by the GPU.
- *  - Pin updates go through `source.setData()`. The map instance is created
- *    once and never torn down for a data change.
- *  - Exactly one Popup element exists, reused across selections.
- *  - Bounds are read once on `moveend`, never per frame.
- *  - Route geometry arrives from OSRM already simplified; nothing is recomputed.
+ * Props, in groups: the original ones used by TourDetail/Admin (pins, route, stops,
+ * initialView, onMoveEnd, onPinSelect, selectedStop, onStopSelect, fitToStops,
+ * className) are unchanged. Explore adds selectedId, userLocation, discovery,
+ * focus, fitRoute, routeColor, popup=false and gestureHandling. The admin console
+ * adds onMapClick, draft and onDraftChange.
  */
-
-const trimmed = (value, fallback) => (typeof value === 'string' && value.trim()) || fallback;
-
-/*
- * OpenFreeMap: no API key, no signup, no rate limit, OpenStreetMap data under
- * ODbL. `positron` is the light grey basemap the indigo/orange pins were
- * designed against. Both URLs are overridable so a self-hosted tile server can
- * be dropped in without touching code.
- */
-const STYLE_LIGHT = trimmed(
-  import.meta.env.VITE_MAP_STYLE,
-  'https://tiles.openfreemap.org/styles/positron'
-);
-const STYLE_DARK = trimmed(
-  import.meta.env.VITE_MAP_STYLE_DARK,
-  'https://tiles.openfreemap.org/styles/dark'
-);
-
-const CATEGORY_COLOR = {
-  MUST_VISIT: '#3b5bdb',
-  MUST_EAT: '#e8590c',
-  FAMOUS_RIDE: '#0ca678',
-};
-
-// Data-driven styling: one expression covers every category, so the layer count
-// stays at two no matter how many pins the city has.
-const categoryColorExpression = [
-  'match',
-  ['get', 'category'],
-  'MUST_VISIT',
-  CATEGORY_COLOR.MUST_VISIT,
-  'MUST_EAT',
-  CATEGORY_COLOR.MUST_EAT,
-  'FAMOUS_RIDE',
-  CATEGORY_COLOR.FAMOUS_RIDE,
-  '#868e96',
-];
-
-const PIN_LAYERS = ['pins-core', 'pins-glow'];
-
-/*
- * Declared in draw order — `addLayer` appends, so the route sits under the pins
- * and the solid core sits over its own glow.
- */
-const LAYERS = [
-  {
-    id: 'route-casing',
-    type: 'line',
-    source: 'route',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 },
-  },
-  {
-    id: 'route-line',
-    type: 'line',
-    source: 'route',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#1d2135', 'line-width': 4 },
-  },
-  {
-    id: 'pins-glow',
-    type: 'circle',
-    source: 'pins',
-    paint: {
-      'circle-color': categoryColorExpression,
-      'circle-blur': 1,
-      'circle-opacity': 0.45,
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 10, 14, 20, 17, 30],
-    },
-  },
-  {
-    id: 'pins-core',
-    type: 'circle',
-    source: 'pins',
-    paint: {
-      'circle-color': categoryColorExpression,
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3.5, 14, 6, 17, 9],
-      'circle-stroke-width': 2,
-      'circle-stroke-color': '#ffffff',
-    },
-  },
-];
-
-const EMPTY = { type: 'FeatureCollection', features: [] };
-
-/*
- * Numbered itinerary markers. The selected one is larger, accent-coloured and
- * stacked above its neighbours. Full class strings on purpose: Tailwind only
- * generates classes it can find as literals in the source.
- */
-const MARKER_BASE =
-  'grid h-7 w-7 cursor-pointer place-items-center rounded-full bg-ink-800 text-xs font-bold text-white shadow-lg ring-2 ring-white transition-all duration-200';
-const MARKER_SELECTED =
-  'grid h-10 w-10 cursor-pointer place-items-center rounded-full bg-glow text-sm font-bold text-white shadow-xl ring-4 ring-white transition-all duration-200';
-
-const applyMarkerStyle = (el, selected) => {
-  el.className = selected ? MARKER_SELECTED : MARKER_BASE;
-  el.style.zIndex = selected ? '2' : '1';
-  el.setAttribute('aria-pressed', selected ? 'true' : 'false');
-};
 
 const coords = (item) => {
   const lng = Number(item?.lng);
   const lat = Number(item?.lat);
-  return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+  return Number.isFinite(lng) && Number.isFinite(lat) ? { lat, lng } : null;
 };
 
-const toPinCollection = (pins) => ({
-  type: 'FeatureCollection',
-  // A single null lat/lng would otherwise make MapLibre reject the whole
-  // collection and blank every pin on the map.
-  features: pins.reduce((acc, p) => {
-    const position = coords(p);
-    if (position) {
-      acc.push({
-        type: 'Feature',
-        // Keep the payload tiny: anything the popup needs, nothing more.
-        properties: { id: p.id, name: p.name, category: p.category, imageUrl: p.imageUrl ?? null },
-        geometry: { type: 'Point', coordinates: position },
-      });
-    }
-    return acc;
-  }, []),
+const lineToPath = (geometry) =>
+  (geometry?.coordinates ?? [])
+    .map(([lng, lat]) => ({ lat: Number(lat), lng: Number(lng) }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+
+const reducedMotion = () =>
+  typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const latLngOf = (position) => ({
+  lat: typeof position.lat === 'function' ? position.lat() : position.lat,
+  lng: typeof position.lng === 'function' ? position.lng() : position.lng,
 });
-
-const toRouteFeature = (route) =>
-  route ? { type: 'Feature', properties: {}, geometry: route } : EMPTY;
-
-// setData resolves a promise in v6; a source removed mid-flight (style swap,
-// unmount) would otherwise surface as an unhandled rejection in the console.
-const pushData = (map, id, data) => {
-  const source = map?.getSource(id);
-  if (!source) return;
-  Promise.resolve(source.setData(data)).catch(() => {});
-};
 
 function MapCanvas({
   pins = [],
@@ -169,335 +64,465 @@ function MapCanvas({
   initialView = { latitude: 26.9124, longitude: 75.7873, zoom: 12 },
   onMoveEnd,
   onPinSelect,
-  // Optional, additive: index into `stops` of the highlighted numbered marker, a
-  // click callback for those markers, and whether to frame all stops on mount.
   selectedStop = null,
   onStopSelect,
   fitToStops = false,
   className = 'h-[60vh] w-full',
+  // --- Explore -------------------------------------------------------------
+  selectedId = null,
+  userLocation = null, // { lat, lng, accuracy } — a real GPS fix only, never a fallback
+  discovery = null, // { lat, lng, radius } — ring showing the search area
+  focus = null, // { lat, lng, zoom?, fitRadius?, padding?, token } — move the camera
+  fitRoute = false,
+  routeColor = null,
+  popup = true,
+  gestureHandling = 'auto',
+  // --- Admin pin manager ---------------------------------------------------
+  onMapClick,
+  draft = null, // { lat, lng } — a draggable marker
+  onDraftChange,
 }) {
   const containerRef = useRef(null);
-  const mapRef = useRef(null);
-  const popupRef = useRef(null);
-  const originRef = useRef(null);
-  const markersRef = useRef([]);
-  const fittedRef = useRef('');
-  const [failure, setFailure] = useState(null);
-
   const { isDark } = useTheme();
-  const styleUrl = isDark ? STYLE_DARK : STYLE_LIGHT;
-  const styleRef = useRef(styleUrl);
-
-  const pinCollection = useMemo(() => toPinCollection(pins), [pins]);
-  const routeFeature = useMemo(() => toRouteFeature(route), [route]);
-
-  /*
-   * Everything the map's own listeners need lives behind a ref. Parent pages
-   * pass inline object and arrow literals, so a dependency array would tear the
-   * WebGL context down and rebuild it on every keystroke in a filter input.
-   * This effect is declared first, so on mount it runs before the one below.
-   */
-  const latest = useRef({});
-  useEffect(() => {
-    latest.current = {
-      pinCollection,
-      routeFeature,
-      onMoveEnd,
-      onPinSelect,
-      onStopSelect,
-      selectedStop,
-      stopItems,
-    };
+  const { map, g, error } = useGoogleMap(containerRef, {
+    initialView,
+    isDark,
+    options: { gestureHandling },
   });
 
+  // Everything long-lived listeners need sits behind a ref (see header comment).
+  const latest = useRef({});
+  latest.current = {
+    onMoveEnd,
+    onPinSelect,
+    onStopSelect,
+    onMapClick,
+    onDraftChange,
+    selectedStop,
+    selectedId,
+    popup,
+    stopItems: null,
+  };
+
+  const pinStore = useRef({ clusterer: null, markers: new Map(), info: null });
+
+  /* ---------------------------------------------------------- bounds + clicks */
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return undefined;
-
-    /*
-     * attributionControl is deliberately left at its default: MapLibre then
-     * renders a responsive OSM/OpenFreeMap credit, expanded where it fits and
-     * collapsed under 640px. ODbL requires that credit to stay visible.
-     */
-    const map = new MapLibreMap({
-      container,
-      style: styleRef.current,
-      center: [Number(initialView.longitude), Number(initialView.latitude)],
-      zoom: Number(initialView.zoom) || 12,
-      // Tour maps are read top-down. Dropping rotation also removes the
-      // two-finger drag ambiguity that makes phone panning feel sticky.
-      dragRotate: false,
-      // Tiles here are static city geometry, not live data. Not re-fetching on
-      // Cache-Control expiry saves a round of requests on a long session.
-      refreshExpiredTiles: false,
-    });
-    mapRef.current = map;
-    originRef.current = [Number(initialView.longitude), Number(initialView.latitude)];
-
-    map.touchZoomRotate.disableRotation();
-    map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
-
-    /*
-     * Sources and layers are re-added on `styledata`, not just once on `load`:
-     * `setStyle()` (the dark-mode switch) throws the old style away entirely,
-     * and everything we added with it. The getLayer/getSource guards make this
-     * idempotent, which matters because styledata fires several times per style.
-     */
-    const install = () => {
-      if (!map.isStyleLoaded()) return;
-      if (!map.getSource('pins')) {
-        map.addSource('pins', { type: 'geojson', data: latest.current.pinCollection ?? EMPTY });
-      }
-      if (!map.getSource('route')) {
-        map.addSource('route', { type: 'geojson', data: latest.current.routeFeature ?? EMPTY });
-      }
-      for (const layer of LAYERS) {
-        if (!map.getLayer(layer.id)) map.addLayer(layer);
-      }
-    };
+    if (!map) return undefined;
 
     const emitBounds = () => {
       const b = map.getBounds();
-      latest.current.onMoveEnd?.({
-        west: b.getWest(),
-        south: b.getSouth(),
-        east: b.getEast(),
-        north: b.getNorth(),
-      });
+      if (!b) return;
+      const { north, south, east, west } = b.toJSON();
+      latest.current.onMoveEnd?.({ west, south, east, north });
     };
-
-    const handleLoad = () => {
-      install();
-      // `moveend` never fires for the initial camera, so a parent that only
-      // fetches pins for the visible box would sit empty until the first pan.
-      emitBounds();
-    };
-
-    const closePopup = () => {
-      popupRef.current?.remove();
-    };
-
-    const handleClick = (event) => {
-      // One general click listener rather than a per-layer one: a pin sitting
-      // in both the glow and the core would otherwise fire the callback twice.
-      const live = PIN_LAYERS.filter((id) => map.getLayer(id));
-      if (!live.length) return;
-      const hit = map.queryRenderedFeatures(event.point, { layers: live })[0];
-      if (!hit) {
-        closePopup();
-        return;
-      }
-
-      const [lng, lat] = hit.geometry.coordinates;
-      // Anchor to the pin, not to the click point — the glow is up to 30px
-      // wide, and Personal Tour Mode routes to exactly these numbers.
-      const picked = { ...hit.properties, lng, lat };
-
-      const body = document.createElement('div');
-      const title = document.createElement('p');
-      title.className = 'text-sm font-semibold';
-      // textContent, not innerHTML: attraction names are user-facing data.
-      title.textContent = picked.name ?? 'Attraction';
-      const sub = document.createElement('p');
-      sub.className = 'text-xs capitalize text-ink-700';
-      sub.textContent = String(picked.category ?? '').toLowerCase().replace(/_/g, ' ');
-      body.append(title, sub);
-
-      if (!popupRef.current) {
-        popupRef.current = new Popup({
-          closeButton: true,
-          closeOnClick: false,
-          maxWidth: '220px',
-          offset: 12,
-        });
-      }
-      popupRef.current.setLngLat([lng, lat]).setDOMContent(body).addTo(map);
-
-      latest.current.onPinSelect?.(picked);
-    };
-
-    const pointer = () => {
-      map.getCanvas().style.cursor = 'pointer';
-    };
-    const resetPointer = () => {
-      map.getCanvas().style.cursor = '';
-    };
-
-    const handleError = (event) => {
-      // A single 404'd tile is not worth an overlay; a style that never loaded
-      // is, otherwise the user just sees an empty grey box.
-      if (map.isStyleLoaded()) return;
-
-      // One retry on the light style first. A bad VITE_MAP_STYLE, or a dark
-      // style the tile host has since renamed, should degrade to "light
-      // basemap under a dark UI" rather than to nothing at all.
-      if (styleRef.current !== STYLE_LIGHT) {
-        styleRef.current = STYLE_LIGHT;
-        map.setStyle(STYLE_LIGHT);
-        return;
-      }
-      setFailure(event?.error?.message ?? 'Could not reach the map tiles.');
-    };
-
-    map.on('load', handleLoad);
-    map.on('styledata', install);
-    map.on('moveend', emitBounds);
-    map.on('click', handleClick);
-    map.on('mouseenter', PIN_LAYERS, pointer);
-    map.on('mouseleave', PIN_LAYERS, resetPointer);
-    map.on('error', handleError);
-
-    // MapLibre only listens for *window* resize. This container is `h-[55vh]
-    // md:h-[65vh]` and also mounts inside a tab panel, so both the breakpoint
-    // flip and the tab switch need an explicit resize or the canvas stays
-    // stretched at its old size.
-    const observer = new ResizeObserver(() => map.resize());
-    observer.observe(container);
+    // `idle` also fires once after the first render, which is what a parent that
+    // fetches pins for the visible box needs — moveend never fires for the initial camera.
+    const idle = map.addListener('idle', emitBounds);
+    const click = map.addListener('click', (event) => {
+      pinStore.current.info?.close();
+      if (event.latLng) latest.current.onMapClick?.({ lat: event.latLng.lat(), lng: event.latLng.lng() });
+    });
 
     return () => {
-      observer.disconnect();
-      popupRef.current?.remove();
-      popupRef.current = null;
-      // StrictMode mounts effects twice in dev; without remove() the first
-      // map leaks a live WebGL context and the browser starts dropping them.
-      map.remove();
-      mapRef.current = null;
+      idle.remove();
+      click.remove();
     };
-    // Deliberately mount-only. initialView is a starting camera, and every
-    // callback is read through `latest`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [map]);
+
+  /* ------------------------------------------------------------------- pins */
+  // Clusterer + InfoWindow live as long as the map instance does.
+  useEffect(() => {
+    if (!map || !g) return undefined;
+    const store = pinStore.current;
+    store.info = new g.InfoWindow({ maxWidth: 240 });
+    store.clusterer = new MarkerClusterer({
+      map,
+      markers: [],
+      renderer: {
+        render: ({ count, position }) =>
+          new g.AdvancedMarkerElement({ position, content: createClusterContent(count), zIndex: 1000 + count }),
+      },
+    });
+
+    return () => {
+      store.info?.close();
+      store.info = null;
+      store.clusterer?.clearMarkers();
+      store.clusterer?.setMap(null);
+      store.clusterer = null;
+      store.markers.forEach((entry) => {
+        entry.marker.map = null;
+      });
+      store.markers.clear();
+    };
+  }, [map, g]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || styleRef.current === styleUrl) return;
-    styleRef.current = styleUrl;
-    setFailure(null);
-    // `styledata` re-runs install(), which re-adds the sources and layers.
-    map.setStyle(styleUrl);
-  }, [styleUrl]);
+    const store = pinStore.current;
+    if (!map || !g || !store.clusterer) return;
 
-  useEffect(() => {
-    pushData(mapRef.current, 'pins', pinCollection);
-  }, [pinCollection]);
-
-  useEffect(() => {
-    pushData(mapRef.current, 'route', routeFeature);
-  }, [routeFeature]);
-
-  /*
-   * Follow a genuinely new origin — "use my location" resolving, or a different
-   * tour being opened. Compared by value because parents pass an inline object
-   * literal, so identity changes on every render and would otherwise yank the
-   * camera back from wherever the traveller has panned to.
-   */
-  const { latitude, longitude, zoom } = initialView;
-  useEffect(() => {
-    const map = mapRef.current;
-    const lng = Number(longitude);
-    const lat = Number(latitude);
-    if (!map || !Number.isFinite(lng) || !Number.isFinite(lat)) return;
-
-    const previous = originRef.current;
-    if (previous && Math.abs(previous[0] - lng) < 1e-4 && Math.abs(previous[1] - lat) < 1e-4) {
-      return;
+    const next = new Map();
+    for (const pin of pins) {
+      const position = coords(pin);
+      if (position && pin.id != null) next.set(String(pin.id), { pin, position });
     }
-    originRef.current = [lng, lat];
-    map.easeTo({ center: [lng, lat], zoom: Number(zoom) || map.getZoom(), duration: 600 });
-  }, [latitude, longitude, zoom]);
 
-  /*
-   * A day's itinerary is a handful of stops, so DOM markers are fine here — and
-   * they give us free numbering without a symbol layer or a sprite sheet.
-   *
-   * Keyed on the coordinates rather than the array: `stops` defaults to a fresh
-   * `[]` and arrives from an inline expression, so its identity changes on every
-   * render and the markers would be destroyed and rebuilt each time.
-   */
+    const removed = [];
+    store.markers.forEach((entry, id) => {
+      const incoming = next.get(id);
+      const rebuilt = incoming && (incoming.pin.kind ?? incoming.pin.category) !== (entry.pin.kind ?? entry.pin.category);
+      if (!incoming || rebuilt) {
+        removed.push(entry.marker);
+        store.markers.delete(id);
+      }
+    });
+    if (removed.length) store.clusterer.removeMarkers(removed, true);
+
+    const added = [];
+    next.forEach(({ pin, position }, id) => {
+      const existing = store.markers.get(id);
+      if (existing) {
+        existing.pin = pin; // keep click payload fresh (distance, rating, ...)
+        const p = existing.marker.position && latLngOf(existing.marker.position);
+        if (!p || p.lat !== position.lat || p.lng !== position.lng) existing.marker.position = position;
+        return;
+      }
+
+      const content = createPinContent(pin);
+      const marker = new g.AdvancedMarkerElement({
+        position,
+        content,
+        title: `${pin.name ?? 'Place'} — ${styleFor(pin).label}`,
+        gmpClickable: true,
+        zIndex: 1,
+      });
+      const entry = { marker, pin, content };
+      marker.addEventListener('gmp-click', () => {
+        const picked = { ...entry.pin, lat: position.lat, lng: position.lng };
+        if (latest.current.popup && store.info) {
+          const body = document.createElement('div');
+          const title = document.createElement('p');
+          title.style.cssText = 'margin:0;font:600 14px system-ui;color:#12141f';
+          title.textContent = picked.name ?? 'Attraction';
+          const sub = document.createElement('p');
+          sub.style.cssText = 'margin:2px 0 0;font:12px system-ui;color:#4b5478;text-transform:capitalize';
+          sub.textContent = styleFor(picked).label;
+          body.append(title, sub);
+          store.info.setContent(body);
+          store.info.open({ map, anchor: marker });
+        }
+        latest.current.onPinSelect?.(picked);
+      });
+      store.markers.set(id, entry);
+      added.push(marker);
+    });
+    if (added.length) store.clusterer.addMarkers(added, true);
+    store.clusterer.render();
+
+    // Newly created pins pick up the current selection straight away.
+    store.markers.forEach((entry, id) => setPinSelected(entry.content, id === String(latest.current.selectedId)));
+  }, [map, g, pins]);
+
+  // Selection only restyles; it never rebuilds a marker.
+  useEffect(() => {
+    pinStore.current.markers.forEach((entry, id) => {
+      const on = selectedId != null && id === String(selectedId);
+      setPinSelected(entry.content, on);
+      entry.marker.zIndex = on ? 999 : 1;
+    });
+  }, [selectedId, map]);
+
+  /* ------------------------------------------------------------------ route */
+  useEffect(() => {
+    if (!map || !g) return undefined;
+    const path = lineToPath(route);
+    if (path.length < 2) return undefined;
+
+    const main = routeColor ?? (isDark ? '#8ea2ff' : '#3b5bdb');
+    const casing = new g.Polyline({
+      map,
+      path,
+      strokeColor: isDark ? '#12141f' : '#ffffff',
+      strokeOpacity: 0.95,
+      strokeWeight: 9,
+      zIndex: 10,
+      clickable: false,
+      geodesic: false,
+    });
+    const line = new g.Polyline({
+      map,
+      path,
+      strokeColor: main,
+      strokeOpacity: 1,
+      strokeWeight: 5,
+      zIndex: 11,
+      clickable: false,
+    });
+
+    if (fitRoute) {
+      const bounds = new g.LatLngBounds();
+      path.forEach((p) => bounds.extend(p));
+      map.fitBounds(bounds, { top: 90, bottom: 90, left: 60, right: 60 });
+    }
+
+    return () => {
+      casing.setMap(null);
+      line.setMap(null);
+    };
+  }, [map, g, route, isDark, routeColor, fitRoute]);
+
+  /* ------------------------------------------------------- numbered stops */
   const stopsKey = stops.map((s) => `${s?.lng},${s?.lat},${s?.name ?? ''}`).join('|');
   const stopItems = useMemo(
-    () =>
-      stops
-        .map((s) => ({ position: coords(s), name: s?.name ?? '' }))
-        .filter((item) => item.position),
+    () => stops.map((s) => ({ position: coords(s), name: s?.name ?? '' })).filter((item) => item.position),
+    // `stops` arrives as a fresh array each render; its content is what matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [stopsKey]
   );
+  latest.current.stopItems = stopItems;
+
+  const stopMarkers = useRef([]);
+  const fitted = useRef('');
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return undefined;
+    if (!map || !g) return undefined;
 
     const markers = stopItems.map((item, i) => {
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.textContent = String(i + 1);
-      el.setAttribute('aria-label', `Stop ${i + 1}${item.name ? `: ${item.name}` : ''}`);
-      applyMarkerStyle(el, latest.current.selectedStop === i);
-      el.addEventListener('click', (event) => {
-        // Handled here: don't let it fall through to the map's pin-popup click.
-        event.stopPropagation();
-        latest.current.onStopSelect?.(i);
+      const content = createStopContent(i + 1, item.name);
+      setStopSelected(content, latest.current.selectedStop === i);
+      const marker = new g.AdvancedMarkerElement({
+        map,
+        position: item.position,
+        content,
+        title: `Stop ${i + 1}${item.name ? `: ${item.name}` : ''}`,
+        gmpClickable: true,
+        zIndex: 500 + i,
       });
-      return new Marker({ element: el }).setLngLat(item.position).addTo(map);
+      marker.addEventListener('gmp-click', () => latest.current.onStopSelect?.(i));
+      return { marker, content };
     });
-    markersRef.current = markers;
+    stopMarkers.current = markers;
 
     // Frame every stop once per distinct set of stops.
-    if (fitToStops && stopItems.length > 1 && fittedRef.current !== stopsKey) {
-      fittedRef.current = stopsKey;
-      const bounds = new LngLatBounds();
+    if (fitToStops && stopItems.length > 1 && fitted.current !== stopsKey) {
+      fitted.current = stopsKey;
+      const bounds = new g.LatLngBounds();
       stopItems.forEach((item) => bounds.extend(item.position));
-      map.fitBounds(bounds, {
-        padding: { top: 70, bottom: 70, left: 50, right: 50 },
-        maxZoom: 14,
-        duration: 0,
+      map.fitBounds(bounds, { top: 70, bottom: 70, left: 50, right: 50 });
+      // fitBounds can zoom in tightly for two nearby stops; keep some context.
+      const once = map.addListener('idle', () => {
+        once.remove();
+        if ((map.getZoom() ?? 0) > 14) map.setZoom(14);
       });
     }
 
     return () => {
-      markers.forEach((m) => m.remove());
-      markersRef.current = [];
+      markers.forEach(({ marker }) => {
+        marker.map = null;
+      });
+      stopMarkers.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stopItems]);
+  }, [map, g, stopItems]);
 
-  // Highlight the selected marker and bring it into view.
   useEffect(() => {
-    markersRef.current.forEach((marker, i) =>
-      applyMarkerStyle(marker.getElement(), i === selectedStop)
-    );
-    const map = mapRef.current;
+    stopMarkers.current.forEach(({ content, marker }, i) => {
+      setStopSelected(content, i === selectedStop);
+      marker.zIndex = i === selectedStop ? 900 : 500 + i;
+    });
     const item = selectedStop == null ? null : latest.current.stopItems?.[selectedStop];
     if (!map || !item) return;
-    const reduce =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    map.easeTo({
-      center: item.position,
-      zoom: Math.max(map.getZoom(), 13.5),
-      duration: reduce ? 0 : 600,
+    if (reducedMotion()) map.moveCamera({ center: item.position, zoom: Math.max(map.getZoom() ?? 0, 13.5) });
+    else {
+      map.panTo(item.position);
+      if ((map.getZoom() ?? 0) < 13.5) map.setZoom(13.5);
+    }
+  }, [selectedStop, map]);
+
+  /* ------------------------------------------------ current location (GPS) */
+  const userStore = useRef({ marker: null, circle: null });
+  const userLat = userLocation?.lat;
+  const userLng = userLocation?.lng;
+  const userAcc = userLocation?.accuracy;
+
+  useEffect(() => {
+    const store = userStore.current;
+    if (!map || !g || !Number.isFinite(userLat) || !Number.isFinite(userLng)) return undefined;
+    const position = { lat: userLat, lng: userLng };
+
+    if (!store.marker) {
+      store.marker = new g.AdvancedMarkerElement({
+        map,
+        position,
+        content: createUserContent(),
+        title: 'Your current location',
+        zIndex: 2000,
+      });
+    } else store.marker.position = position;
+
+    // Accuracy ring only when it is meaningful: a 20 km "accuracy" is not a position.
+    const radius = Number.isFinite(userAcc) && userAcc >= 15 && userAcc <= 3000 ? userAcc : 0;
+    if (radius) {
+      if (!store.circle) {
+        store.circle = new g.Circle({
+          map,
+          center: position,
+          radius,
+          strokeColor: '#4285f4',
+          strokeOpacity: 0.35,
+          strokeWeight: 1,
+          fillColor: '#4285f4',
+          fillOpacity: 0.1,
+          clickable: false,
+          zIndex: 5,
+        });
+      } else {
+        store.circle.setCenter(position);
+        store.circle.setRadius(radius);
+      }
+    } else if (store.circle) {
+      store.circle.setMap(null);
+      store.circle = null;
+    }
+    return undefined;
+  }, [map, g, userLat, userLng, userAcc]);
+
+  // Removed when the fix goes away, or when the map instance changes.
+  useEffect(() => {
+    const store = userStore.current;
+    return () => {
+      if (store.marker) store.marker.map = null;
+      store.circle?.setMap(null);
+      store.marker = null;
+      store.circle = null;
+    };
+  }, [map, userLat == null || userLng == null]);
+
+  /* ---------------------------------------------- discovery radius ring */
+  const dLat = discovery?.lat;
+  const dLng = discovery?.lng;
+  const dRadius = discovery?.radius;
+  useEffect(() => {
+    if (!map || !g || !Number.isFinite(dLat) || !Number.isFinite(dLng) || !dRadius) return undefined;
+    const ring = new g.Circle({
+      map,
+      center: { lat: dLat, lng: dLng },
+      radius: dRadius,
+      strokeColor: '#ff7a45',
+      strokeOpacity: 0.7,
+      strokeWeight: 2,
+      fillColor: '#ff7a45',
+      fillOpacity: 0.05,
+      clickable: false,
+      zIndex: 4,
     });
-  }, [selectedStop]);
+    return () => ring.setMap(null);
+  }, [map, g, dLat, dLng, dRadius]);
+
+  /* ---------------------------------------------------------- camera moves */
+  useEffect(() => {
+    if (!map || !g || !focus || !Number.isFinite(focus.lat) || !Number.isFinite(focus.lng)) return;
+    if (focus.fitRadius) {
+      // ~1° latitude = 111.32 km; longitude shrinks with cos(latitude).
+      const dLatDeg = focus.fitRadius / 111_320;
+      const dLngDeg = focus.fitRadius / (111_320 * Math.max(0.2, Math.cos((focus.lat * Math.PI) / 180)));
+      const bounds = new g.LatLngBounds(
+        { lat: focus.lat - dLatDeg, lng: focus.lng - dLngDeg },
+        { lat: focus.lat + dLatDeg, lng: focus.lng + dLngDeg }
+      );
+      map.fitBounds(bounds, focus.padding ?? 48);
+    } else if (reducedMotion()) {
+      map.moveCamera({ center: { lat: focus.lat, lng: focus.lng }, zoom: focus.zoom ?? map.getZoom() });
+    } else {
+      map.panTo({ lat: focus.lat, lng: focus.lng });
+      if (focus.zoom) map.setZoom(focus.zoom);
+    }
+    // Only a new token moves the camera; the other fields are its payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, g, focus?.token]);
+
+  /*
+   * Follow a genuinely new starting point — a different tour being opened. Compared
+   * by value because parents pass an inline object literal whose identity changes
+   * every render and would otherwise yank the camera back from wherever the
+   * traveller has panned to.
+   */
+  const originRef = useRef(null);
+  const { latitude, longitude, zoom } = initialView;
+  useEffect(() => {
+    const lng = Number(longitude);
+    const lat = Number(latitude);
+    if (!map || !Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    const previous = originRef.current;
+    originRef.current = [lng, lat];
+    if (!previous) return; // first value is the camera the map was built with
+    if (Math.abs(previous[0] - lng) < 1e-4 && Math.abs(previous[1] - lat) < 1e-4) return;
+    map.panTo({ lat, lng });
+    if (zoom) map.setZoom(Number(zoom));
+  }, [map, latitude, longitude, zoom]);
+
+  /* ------------------------------------------------------ admin draft pin */
+  const draftRef = useRef(null);
+  const draftLat = draft?.lat;
+  const draftLng = draft?.lng;
+  useEffect(() => {
+    if (!map || !g) return;
+    if (!Number.isFinite(draftLat) || !Number.isFinite(draftLng)) {
+      if (draftRef.current) {
+        draftRef.current.map = null;
+        draftRef.current = null;
+      }
+      return;
+    }
+    const position = { lat: draftLat, lng: draftLng };
+    if (!draftRef.current) {
+      const marker = new g.AdvancedMarkerElement({
+        map,
+        position,
+        content: createDraftContent(),
+        title: 'New pin — drag to adjust',
+        gmpDraggable: true,
+        zIndex: 3000,
+      });
+      marker.addListener('dragend', () => {
+        if (marker.position) latest.current.onDraftChange?.(latLngOf(marker.position));
+      });
+      draftRef.current = marker;
+    } else {
+      draftRef.current.position = position;
+    }
+  }, [map, g, draftLat, draftLng]);
+
+  useEffect(
+    () => () => {
+      if (draftRef.current) draftRef.current.map = null;
+      draftRef.current = null;
+    },
+    [map]
+  );
 
   return (
     <div className={`${className} relative overflow-hidden rounded-2xl bg-sand-100 dark:bg-ink-900`}>
-      {/* Absolute fill: the height comes from `className` on the parent, and a
-          map container with no measured height renders nothing at all. */}
+      {/* Absolute fill: the height comes from `className` on the parent, and a map
+          container with no measured height renders nothing at all. Google watches
+          the container's size itself, so tab switches and breakpoint flips resize
+          the map without an explicit observer. */}
       <div ref={containerRef} className="absolute inset-0" />
 
-      {failure && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center">
-          <p className="max-w-sm text-sm text-ink-700 dark:text-sand-200">
-            {failure} Check your connection, or point{' '}
-            <code className="font-mono">VITE_MAP_STYLE</code> at another style.
-          </p>
+      {!map && !error && (
+        <div className="pointer-events-none absolute inset-0 animate-pulse bg-sand-100 dark:bg-ink-800" aria-hidden />
+      )}
+
+      {error && (
+        <div role="alert" className="absolute inset-0 grid place-items-center p-6 text-center">
+          <p className="max-w-sm text-sm text-ink-700 dark:text-sand-200">{mapsErrorMessage(error)}</p>
         </div>
       )}
     </div>
   );
 }
 
-// Parent pages re-render on every keystroke in their filter inputs; the map
-// should not follow them down.
+// Parent pages re-render on every keystroke in their filter inputs; the map should
+// not follow them down.
 export default memo(MapCanvas);

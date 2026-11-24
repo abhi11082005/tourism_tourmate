@@ -23,7 +23,7 @@ export function createApp() {
   app.use(
     helmet({
       // The API serves JSON only; CSP belongs on the client origin, which loads
-      // Mapbox tiles/workers and would need a much looser policy than this.
+      // Google Maps scripts, tiles and images and needs a much looser policy.
       contentSecurityPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     })
@@ -70,6 +70,11 @@ export function createApp() {
   app.use(
     pinoHttp({
       logger,
+      // Query strings carry a visitor's coordinates on the nearby/places routes.
+      // Log the path only, so a precise location never lands in the log store.
+      serializers: {
+        req: (req) => ({ id: req.id, method: req.method, url: req.url?.split('?')[0] }),
+      },
       // Health checks would otherwise dominate the log.
       autoLogging: { ignore: (req) => req.url === '/api/health' },
       customLogLevel: (_req, res, err) =>

@@ -43,6 +43,24 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET: z.string().trim().min(1).optional(),
   PAYMENT_CURRENCY: z.string().trim().length(3).toUpperCase().default('INR'),
 
+  /*
+   * Google Maps Platform, server side: Places API (New), Routes API and Route
+   * Matrix. Optional so the rest of the app boots without a Google account —
+   * `googleMapsEnabled` below is what routes check, and they answer 503
+   * GOOGLE_NOT_CONFIGURED instead of failing. This key never reaches the browser;
+   * restrict it to Places API (New) + Routes API and to your server's egress IPs.
+   */
+  GOOGLE_MAPS_SERVER_API_KEY: z
+    .string()
+    .trim()
+    .optional()
+    // The example file ships YOUR_SERVER_RESTRICTED_KEY; a copied-but-unedited
+    // placeholder must read as "not configured", not as a key Google will reject.
+    .transform((v) => (!v || /^YOUR_/i.test(v) ? undefined : v)),
+  // Short dedupe cache for identical Google lookups (seconds). 0 disables it. Kept
+  // deliberately small: Google content is not ours to store (see places.service.js).
+  PLACES_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3_600).default(300),
+
   LLM_PROVIDER: z.enum(['groq', 'gemini', 'none']).default('none'),
   LLM_API_KEY: z.string().optional(),
   LLM_MODEL: z.string().default('llama-3.1-8b-instant'),
@@ -64,6 +82,7 @@ if (!parsed.success) {
 
 export const env = Object.freeze(parsed.data);
 export const isProd = env.NODE_ENV === 'production';
+export const googleMapsEnabled = Boolean(env.GOOGLE_MAPS_SERVER_API_KEY);
 
 /*
  * A gateway is only usable when BOTH halves are present. Checking this once here

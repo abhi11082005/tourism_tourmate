@@ -29,7 +29,7 @@ import { useScrollSpy, useStickyHeaderHeight } from '../hooks/useScrollSpy.js';
  * presentational and receives that state through props, so there is exactly one
  * source of truth whether the booking UI is the desktop rail or the mobile sheet.
  *
- * The map's heavy lifting (MapLibre, ~900kB) is lazy-loaded inside
+ * The map (Google Maps loader + clusterer) is lazy-loaded inside
  * AttractionMapSection and only mounts once that section is near the viewport.
  */
 

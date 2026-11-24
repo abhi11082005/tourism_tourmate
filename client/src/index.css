@@ -1,14 +1,10 @@
-/* MapLibre GL's own stylesheet, first so the @import stays valid CSS. Bundled here
-   rather than fetched with a runtime <link>, which would block the map paint. */
-@import 'maplibre-gl/dist/maplibre-gl.css';
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  /* Both schemes are declared so form controls, scrollbars and the MapLibre
-     attribution box follow the theme without extra CSS. */
+  /* Both schemes are declared so form controls and scrollbars follow the theme
+     without extra CSS. */
   :root {
     color-scheme: light;
   }

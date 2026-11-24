@@ -60,7 +60,8 @@ export function errorHandler(err, req, res, _next) {
   }
 
   const log = status >= 500 ? logger.error.bind(logger) : logger.warn.bind(logger);
-  log({ err, status, path: req.originalUrl, userId: req.user?.id }, 'request failed');
+  // Path only: the query string can hold a visitor's coordinates.
+  log({ err, status, path: req.originalUrl.split('?')[0], userId: req.user?.id }, 'request failed');
 
   if (!isProd && status >= 500) body.error.stack = err?.stack;
   res.status(status).json(body);

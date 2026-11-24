@@ -50,10 +50,10 @@ const MESSAGES = {
 };
 
 /**
- * @param {{ timeout?: number, highAccuracy?: boolean }} [opts]
+ * @param {{ timeout?: number, highAccuracy?: boolean, maximumAge?: number }} [opts]
  * @returns {Promise<{ lat: number, lng: number, accuracy: number }>}
  */
-export function currentPosition({ timeout = 8_000, highAccuracy = false } = {}) {
+export function currentPosition({ timeout = 8_000, highAccuracy = false, maximumAge = 300_000 } = {}) {
   if (!('geolocation' in navigator)) {
     return Promise.reject(new GeolocationRefused('unsupported', MESSAGES.unsupported));
   }
@@ -93,7 +93,7 @@ export function currentPosition({ timeout = 8_000, highAccuracy = false } = {}) 
               : 'unavailable';
         fail(new GeolocationRefused(reason, MESSAGES[reason]));
       },
-      { enableHighAccuracy: highAccuracy, timeout, maximumAge: 300_000 }
+      { enableHighAccuracy: highAccuracy, timeout, maximumAge }
     );
   });
 }

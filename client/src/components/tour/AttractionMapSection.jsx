@@ -2,9 +2,9 @@ import { lazy, Suspense, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Clock, MapPin } from 'lucide-react';
 import { useInView } from '../../hooks/useInView.js';
 
-// The map is ~900kB of MapLibre GL. It is imported lazily AND only mounted once this
+// The Google Maps loader and clusterer are imported lazily AND only mounted once this
 // section is near the viewport (or the traveller asked for it by picking a stop), so
-// the itinerary above the fold never pays for WebGL.
+// the itinerary above the fold never pays for the map.
 const MapCanvas = lazy(() => import('../MapCanvas.jsx'));
 
 const CATEGORY_LABEL = {

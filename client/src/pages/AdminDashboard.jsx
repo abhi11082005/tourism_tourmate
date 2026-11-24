@@ -9,7 +9,7 @@ import CouponManager from '../components/CouponManager.jsx';
 import CampaignManager from '../components/CampaignManager.jsx';
 import AdminChangableCard from '../components/AdminChangableCard.jsx';
 
-// MapLibre GL is ~900kB. Same call as the tour detail page: load the pin manager on
+// The Google Maps loader is lazy. Same call as the tour detail page: load the pin manager on
 // demand so it never weighs down the admin console's first paint.
 const MapPinManager = lazy(() => import('../components/MapPinManager.jsx'));
 
@@ -27,7 +27,7 @@ const MapPinManager = lazy(() => import('../components/MapPinManager.jsx'));
  *      replacing the old raw-JSON builder and the standalone seat manager.
  *   4. Guide assignment — pin a guide to each upcoming departure.
  *   5. Map pins — click-to-place attractions with the mood scores that drive PostGIS
- *      route selection (lazy-loaded; it pulls in MapLibre).
+ *      route selection (lazy-loaded; it pulls in the Google Maps loader).
  *   6. Offers — coupon codes and festival campaigns, the two halves of the discount
  *      engine that surface on the storefront.
  */

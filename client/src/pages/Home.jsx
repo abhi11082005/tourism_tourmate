@@ -338,9 +338,9 @@ export default function Home() {
         </ul>
       </section>
 
-      {/* Renders the Spotlight Mapbox Modal */}
+      {/* Spotlight detail modal (Google map inside) */}
       <SpotlightModal 
-        spotlightId={selectedSpotlightId} 
+        attractionId={selectedSpotlightId} 
         onClose={() => setSelectedSpotlightId(null)} 
       />
       

@@ -63,7 +63,7 @@ attractionRouter.get(
   })
 );
 
-// Viewport pins as GeoJSON — one request per pan, rendered as a Mapbox source.
+// Viewport pins as GeoJSON — one request per settled pan, capped at 500 by the service.
 attractionRouter.get(
   '/pins',
   validate(

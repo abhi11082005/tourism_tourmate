@@ -3,9 +3,6 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  optimizeDeps: {
-    exclude: ['maplibre-gl'], // <-- Add this line
-  },
   server: {
     port: 5173,
     // Same-origin API in dev: no CORS preflight on every seat-availability poll.
@@ -20,10 +17,9 @@ export default defineConfig({
     target: 'es2022',
     rollupOptions: {
       output: {
-        // MapLibre GL is ~900kB. Splitting it keeps the tour list interactive
-        // while the map chunk is still downloading.
+        // The Google Maps loader + marker clusterer live in the lazy map chunk;
+        // splitting out the stable vendor code keeps that chunk small and cacheable.
         manualChunks: {
-          maplibre: ['maplibre-gl'],
           vendor: ['react', 'react-dom', 'react-router-dom', '@tanstack/react-query'],
         },
       },

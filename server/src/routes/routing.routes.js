@@ -4,6 +4,8 @@ import rateLimit from 'express-rate-limit';
 import { asyncHandler, validate } from '../middleware/index.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { buildMoodRoute, optimiseTour } from '../services/osrm.service.js';
+import { requireGoogle } from '../services/google.service.js';
+import { computeRoute, TRAVEL_MODES } from '../services/places.service.js';
 import { queryOne } from '../db/pool.js';
 import { notFound } from '../utils/httpError.js';
 
@@ -39,6 +41,40 @@ routingRouter.post(
     // Same inputs give the same line for a while; let the browser reuse it.
     res.set('cache-control', 'private, max-age=120');
     res.json(route);
+  })
+);
+
+/**
+ * "Take me there" — a real-road route from Google Routes API for walking, driving
+ * or cycling (cycling is not available everywhere; those requests answer 422
+ * ROUTE_NOT_FOUND). Separate from /route on purpose: Personal Tour Mode's mood
+ * routing is built on OSRM + PostGIS waypoints and is not replaced.
+ */
+routingRouter.post(
+  '/google-route',
+  routeLimiter,
+  validate(
+    'body',
+    z.object({
+      from: point,
+      to: point,
+      mode: z.enum(TRAVEL_MODES).default('walk'),
+    })
+  ),
+  asyncHandler(async (req, res) => {
+    requireGoogle();
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) controller.abort(new Error('client closed request'));
+    });
+    try {
+      const route = await computeRoute({ ...req.body, signal: controller.signal });
+      res.set('cache-control', 'private, max-age=120');
+      res.json(route);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      throw err;
+    }
   })
 );
 

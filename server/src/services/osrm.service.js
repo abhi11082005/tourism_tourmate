@@ -83,7 +83,7 @@ export async function buildMoodRoute({ from, to, mood = 'scenic', profile = env.
     profile,
     distanceMeters: Math.round(route.distance),
     durationSeconds: Math.round(route.duration),
-    // GeoJSON LineString — Mapbox GL renders this directly as a layer source.
+    // GeoJSON LineString — the map client converts it to a Google Maps polyline path.
     geometry: route.geometry,
     waypoints: ordered.map((w) => ({
       id: w.id,

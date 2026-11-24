@@ -75,9 +75,16 @@ export async function pinsInBounds({ west, south, east, north, category }) {
                 )
               ), '[]'::json)
             ) AS geojson
-       FROM attractions a
-      WHERE a.location && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-        AND ($5::attraction_category IS NULL OR a.category = $5)`,
+       FROM (
+              -- Capped: a zoomed-out viewport must not ship every attraction in one
+              -- response. Best-scoring first, so the cap drops the least interesting.
+              SELECT *
+                FROM attractions
+               WHERE location && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+                 AND ($5::attraction_category IS NULL OR category = $5)
+               ORDER BY scenic_score DESC, name
+               LIMIT 500
+            ) a`,
     [west, south, east, north, category ?? null]
   );
   return row.geojson;

@@ -1,11 +1,11 @@
 
-import { useEffect, useState } from "react";
-import Map, { Marker, NavigationControl } from "react-map-gl";
-import "mapbox-gl/dist/mapbox-gl.css";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api.js";
 
-const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+// Same lazy Google Maps canvas as Explore and the tour page: the map library is only
+// downloaded when a spotlight actually opens.
+const MapCanvas = lazy(() => import("./MapCanvas.jsx"));
 
 export default function SpotlightModal({ attractionId, onClose }) {
   const [data, setData] = useState(null);
@@ -46,10 +46,19 @@ export default function SpotlightModal({ attractionId, onClose }) {
     return () => controller.abort();
   }, [attractionId]);
 
+  const pin = useMemo(
+    () =>
+      data && data.lat != null && data.lng != null
+        ? [{ id: data.id, name: data.name, category: data.category, lat: Number(data.lat), lng: Number(data.lng) }]
+        : [],
+    [data]
+  );
+
   if (!attractionId) return null;
 
   const hasCoordinates =
-    data?.lat != null && data?.lng != null;
+    data?.lat != null && data?.lng != null &&
+    Number.isFinite(Number(data.lat)) && Number.isFinite(Number(data.lng));
 
   return (
     <div
@@ -133,35 +142,22 @@ export default function SpotlightModal({ attractionId, onClose }) {
 
             {/* Map */}
             <div className="relative h-[350px] w-full bg-gray-900 md:h-auto md:min-h-[450px] md:w-1/2">
-              {hasCoordinates && MAPBOX_TOKEN ? (
-                <Map
-                  mapboxAccessToken={MAPBOX_TOKEN}
-                  initialViewState={{
-                    longitude: Number(data.lng),
-                    latitude: Number(data.lat),
-                    zoom: 12,
-                  }}
-                  mapStyle="mapbox://styles/mapbox/dark-v11"
-                  style={{ width: "100%", height: "100%" }}
+              {hasCoordinates ? (
+                <Suspense
+                  fallback={<div className="h-full w-full animate-pulse bg-gray-800" aria-hidden />}
                 >
-                  <NavigationControl position="bottom-right" />
-
-                  <Marker
-                    longitude={Number(data.lng)}
-                    latitude={Number(data.lat)}
-                    anchor="bottom"
-                  >
-                    <div className="relative flex items-center justify-center">
-                      <div className="absolute h-8 w-8 animate-ping rounded-full bg-orange-500 opacity-70" />
-                      <div className="relative h-4 w-4 rounded-full border-2 border-white bg-orange-500" />
-                    </div>
-                  </Marker>
-                </Map>
+                  <MapCanvas
+                    className="h-full w-full"
+                    pins={pin}
+                    selectedId={data.id}
+                    popup={false}
+                    gestureHandling="cooperative"
+                    initialView={{ latitude: Number(data.lat), longitude: Number(data.lng), zoom: 13 }}
+                  />
+                </Suspense>
               ) : (
                 <div className="flex h-full items-center justify-center text-gray-400">
-                  {!MAPBOX_TOKEN
-                    ? "Mapbox token is missing."
-                    : "Location unavailable."}
+                  Location unavailable.
                 </div>
               )}
             </div>

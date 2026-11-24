@@ -164,7 +164,22 @@ export const api = {
       signal,
     }),
   byCategory: (category, signal) => request(`/attractions/category/${category}`, { signal }),
+  // One curated attraction by UUID: { attraction: { ..., tours: [{id,title,slug}] } }.
+  getAttraction: (id, signal) => request(`/attractions/${id}`, { signal }),
   pins: (bounds, signal) => request('/attractions/pins', { query: bounds, signal }),
+
+  // ---------------------------------------------- Google Places discovery
+  // Server-side Places API (New). Guests allowed. A 503 with code
+  // GOOGLE_NOT_CONFIGURED means the server has no Google key: curated pins still work.
+  placesNearby: ({ lat, lng, radius, groups }, signal) =>
+    request('/places/nearby', { query: { lat, lng, radius, groups: groups?.join(',') }, signal }),
+  placesSearch: ({ q, lat, lng }, signal) => request('/places/search', { query: { q, lat, lng }, signal }),
+  placeDetails: (placeId, signal) => request(`/places/${encodeURIComponent(placeId)}`, { signal }),
+  // Real-road distance + time from one origin to many destinations (Route Matrix).
+  placesDistances: (body, signal) => request('/places/distances', { method: 'POST', body, signal }),
+  // Same-origin URL that redirects to a short-lived Google photo; safe for <img src>.
+  placePhotoUrl: (name, width = 480) =>
+    `${BASE}/places/photo?name=${encodeURIComponent(name)}&w=${width}`,
 
   // Added spotlight specific endpoints based on recent route creations
   spotlightsByCategory: (category, query, signal) => request(`/spotlights/category/${category}`, { query, signal }),
@@ -224,6 +239,8 @@ export const api = {
   // ------------------------------------------------------------ routing
   route: (body, signal) => request('/routing/route', { method: 'POST', body, signal }),
   guidedRoute: (slotId, signal) => request(`/routing/guided/${slotId}`, { signal }),
+  // Real-road route from Google Routes API: { provider, mode, distanceMeters, durationSeconds, geometry }.
+  googleRoute: (body, signal) => request('/routing/google-route', { method: 'POST', body, signal }),
 
 // -------------------------------------------------------------- admin
   analytics: (signal) => request('/admin/analytics', { signal }),
