@@ -18,15 +18,16 @@ export const radiusLabel = (m) => `${m / 1000} km`;
  */
 export const CHIPS = [
   { id: 'MUST_VISIT', label: 'Must visit', color: CATEGORY_STYLE.MUST_VISIT.color, curated: 'MUST_VISIT', groups: ['attractions'] },
-  { id: 'MUST_EAT', label: 'Must eat', color: CATEGORY_STYLE.MUST_EAT.color, curated: 'MUST_EAT', groups: ['street_food', 'restaurants'] },
+  // Must eat = street food + restaurants that are verifiably well reviewed (>= 4.0, >= 100 reviews).
+  { id: 'MUST_EAT', label: 'Must eat', color: CATEGORY_STYLE.MUST_EAT.color, curated: 'MUST_EAT', groups: ['street_food', 'popular_food'] },
   { id: 'FAMOUS_RIDE', label: 'Famous rides', color: CATEGORY_STYLE.FAMOUS_RIDE.color, curated: 'FAMOUS_RIDE', groups: ['rides'] },
-  { id: 'restaurants', label: 'Restaurants', color: '#c2255c', groups: ['restaurants'] },
-  { id: 'cafes', label: 'Cafes', color: '#c2255c', groups: ['cafes'] },
-  { id: 'street_food', label: 'Street food', color: '#c2255c', groups: ['street_food'] },
-  { id: 'shopping', label: 'Shopping', color: '#7048e8', groups: ['shopping'] },
-  { id: 'museums', label: 'Museums', color: '#7048e8', groups: ['museums'] },
-  { id: 'temples', label: 'Temples & monuments', color: '#7048e8', groups: ['temples'] },
-  { id: 'experiences', label: 'Experiences', color: '#7048e8', groups: ['experiences'] },
+  { id: 'restaurants', label: 'Restaurants', color: CATEGORY_STYLE.restaurant.color, groups: ['restaurants'] },
+  { id: 'cafes', label: 'Cafes', color: CATEGORY_STYLE.cafe.color, groups: ['cafes'] },
+  { id: 'street_food', label: 'Street food', color: CATEGORY_STYLE.street_food.color, groups: ['street_food'] },
+  { id: 'shopping', label: 'Shopping', color: CATEGORY_STYLE.shopping.color, groups: ['shopping'] },
+  { id: 'museums', label: 'Museums', color: CATEGORY_STYLE.museum.color, groups: ['museums'] },
+  { id: 'temples', label: 'Temples & monuments', color: CATEGORY_STYLE.temple.color, groups: ['temples'] },
+  { id: 'experiences', label: 'Experiences', color: CATEGORY_STYLE.experience.color, groups: ['experiences'] },
 ];
 
 // What "All" (no chip selected) asks Google for: three calls, not nine.
@@ -73,6 +74,7 @@ export function curatedToPlace(a) {
     rating: null,
     ratingCount: null,
     openNow: null,
+    priceLevel: null,
     visitMinutes: a.avg_visit_min ?? a.visitMinutes ?? null,
     // From PostGIS ST_Distance on the geography type, rounded to metres.
     straightLineMeters: num(a.distance_m),
@@ -99,6 +101,10 @@ export function googleToPlace(p) {
     rating: p.rating ?? null,
     ratingCount: p.ratingCount ?? null,
     openNow: p.openNow ?? null,
+    priceLevel: p.priceLevel ?? null,
+    rideType: p.rideType ?? null,
+    availability: p.availability ?? null,
+    groupKey: p.group ?? null,
     straightLineMeters: p.straightLineMeters ?? null,
   };
 }

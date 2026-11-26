@@ -8,6 +8,9 @@ import {
   normalizePlace,
   parseDuration,
   PLACE_GROUPS,
+  TABLE_B_RESPONSE_ONLY,
+  acceptsPlace,
+  requestTypes,
 } from '../src/services/places.logic.js';
 
 const AMBER = { lat: 26.9855, lng: 75.8513 };
@@ -80,9 +83,28 @@ test('dedupePlaces: curated wins and repeated Place IDs collapse', () => {
   assert.equal(droppedAsCurated, 1);
 });
 
-test('every group has either types or a text query, and a label', () => {
+test('every group has searches, a label and a kind', () => {
   for (const [key, g] of Object.entries(PLACE_GROUPS)) {
-    assert.ok(g.label, key);
-    assert.ok(Boolean(g.types?.length) !== Boolean(g.textQuery), `${key} must have types xor textQuery`);
+    assert.ok(g.label && g.kind, key);
+    assert.ok(g.searches.length > 0, key);
+    for (const sr of g.searches) {
+      assert.ok(Boolean(sr.types?.length) !== Boolean(sr.textQuery), `${key}: each search is types xor textQuery`);
+    }
   }
+});
+
+test('no group ever requests a Table B (response-only) type', () => {
+  for (const t of requestTypes()) assert.ok(!TABLE_B_RESPONSE_ONLY.includes(t), `${t} is response-only`);
+});
+
+test('acceptsPlace: temple regression, rides strictness, normalize keeps unknowns null', () => {
+  const raw = (o) => ({ id: 'x', displayName: { text: o.name ?? 'Place' }, location: { latitude: 1, longitude: 1 }, ...o });
+  assert.equal(acceptsPlace(raw({ primaryType: 'hindu_temple', types: ['hindu_temple'] }), 'temples'), true);
+  assert.equal(acceptsPlace(raw({ primaryType: 'restaurant', types: ['restaurant'], name: 'Temple Cafe' }), 'temples'), false);
+  assert.equal(acceptsPlace(raw({ name: 'Fort', types: ['tourist_attraction'] }), 'rides'), false);
+  assert.equal(acceptsPlace(raw({ name: 'Nahargarh Ropeway', types: ['tourist_attraction'] }), 'rides'), true);
+  const n = normalizePlace(raw({ types: ['tourist_attraction'] }), 'attractions', null);
+  assert.equal(n.rating, null);
+  assert.equal(n.priceLevel, null);
+  assert.equal(n.openNow, null);
 });

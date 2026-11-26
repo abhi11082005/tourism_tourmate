@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Clock, MapPin, Star } from 'lucide-react';
 import { CATEGORY_STYLE } from '../../lib/mapMarkers.js';
 import { placeImage, ratingLabel, straightLabel, travelLabel } from '../../lib/discovery.js';
@@ -77,19 +78,43 @@ export function Distances({ place, travel, mode }) {
   );
 }
 
+const PRICE_WORD = ['Free', '₹', '₹₹', '₹₹₹', '₹₹₹₹'];
+
+/** Only when Google reported a price level. */
+export function PriceLevel({ place }) {
+  if (place.priceLevel == null) return null;
+  return (
+    <span className="text-xs font-semibold" title="Price level reported by Google">
+      {PRICE_WORD[place.priceLevel]}
+    </span>
+  );
+}
+
+/** Rides: the kind of ride, and an honest note that we have not checked it is running. */
+export function RideNote({ place }) {
+  if (!place.rideType) return null;
+  return (
+    <p className="text-xs">
+      <span className="font-semibold">{place.rideType}</span>
+      <span className="faint"> · Availability, timings and prices not verified — check before you go.</span>
+    </p>
+  );
+}
+
 export function PlaceImage({ place, className = '', width = 480 }) {
   const src = placeImage(place, width);
-  return src ? (
+  const [failed, setFailed] = useState(null);
+  const broken = failed === src;
+  return src && !broken ? (
     <img
+      key={src}
       src={src}
       alt=""
       loading="lazy"
       decoding="async"
       referrerPolicy="no-referrer"
       className={`object-cover ${className}`}
-      onError={(e) => {
-        e.currentTarget.style.display = 'none';
-      }}
+      onError={() => setFailed(src)}
     />
   ) : (
     <div className={`grid place-items-center bg-sand-100 text-sand-500 dark:bg-ink-800 ${className}`} aria-hidden>

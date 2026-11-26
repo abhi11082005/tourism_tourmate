@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Compass, ExternalLink, Flag, Navigation } from 'lucide-react';
 import BottomSheet from '../tour/BottomSheet.jsx';
 import { api } from '../../lib/api.js';
 import { googleDirectionsUrl, placeImage } from '../../lib/discovery.js';
-import { CategoryDot, Distances, OpenNow, Rating, SourceBadge } from './PlaceBits.jsx';
+import { CategoryDot, Distances, OpenNow, PriceLevel, Rating, RideNote, SourceBadge } from './PlaceBits.jsx';
 
 /*
  * Full detail for one place, in the app's accessible modal sheet.
@@ -26,11 +26,11 @@ export default function PlaceDetail({
 }) {
   const open = Boolean(place);
   // Keep showing the last place while the sheet slides out.
-  const [shown, setShown] = useState(place);
-  useEffect(() => {
-    if (place) setShown(place);
-  }, [place]);
-  const p = shown;
+  // Derived synchronously (no effect lag) so the previous place's data can never flash
+  // under the new place's name.
+  const lastPlace = useRef(place);
+  if (place) lastPlace.current = place;
+  const p = place ?? lastPlace.current;
 
   const google = p?.source === 'google';
   const details = useQuery({
@@ -65,7 +65,7 @@ export default function PlaceDetail({
 
   return (
     <BottomSheet open={open} onClose={onClose} title={p.name}>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-5">
+      <div key={p.id} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-5">
         {hero && <img src={hero} alt="" className="h-48 w-full rounded-2xl object-cover" referrerPolicy="no-referrer" />}
 
         {photos.length > 0 && (
@@ -74,10 +74,13 @@ export default function PlaceDetail({
               <figure key={ph.name} className="shrink-0 snap-start">
                 <img
                   src={api.placePhotoUrl(ph.name, 640)}
-                  alt=""
+                  alt={`${p.name} photo`}
                   loading="lazy"
                   referrerPolicy="no-referrer"
                   className="h-44 w-64 rounded-2xl object-cover"
+                  onError={(e) => {
+                    e.currentTarget.closest('figure').style.display = 'none';
+                  }}
                 />
                 {ph.attributions?.[0]?.name && (
                   <figcaption className="faint mt-1 max-w-64 truncate text-[10px]">Photo: {ph.attributions[0].name}</figcaption>
@@ -90,14 +93,19 @@ export default function PlaceDetail({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <SourceBadge source={p.source} />
           <CategoryDot place={p} />
+          <PriceLevel place={d?.priceLevel != null ? { ...p, priceLevel: d.priceLevel } : p} />
           <Rating place={d ? { ...p, rating: d.rating, ratingCount: d.ratingCount } : p} />
           <OpenNow place={d ? { ...p, openNow: d.openNow } : p} />
         </div>
 
+        <RideNote place={p} />
         {description && <p className="muted text-sm leading-relaxed">{description}</p>}
         {google && details.isPending && <div className="h-10 animate-pulse rounded-xl bg-sand-100 dark:bg-ink-800" aria-hidden />}
         {google && details.isError && (
-          <p className="notice-error">More details from Google aren&apos;t available right now.</p>
+          <p className="notice-error">
+            More details from Google aren&apos;t available right now
+            {details.error?.code ? ` (${details.error.code})` : ''}.
+          </p>
         )}
 
         {(d?.address ?? p.address) && (

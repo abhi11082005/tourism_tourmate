@@ -62,15 +62,18 @@ export async function googleFetch(url, { method = 'POST', body, fieldMask, timeo
       logger.warn({ status: res.status, googleStatus: g.status, googleMessage: g.message }, 'google maps request failed');
 
       if (res.status === 429) {
-        throw new HttpError(503, 'Google Maps is rate limiting us, try again shortly', { code: 'GOOGLE_QUOTA' });
+        throw new HttpError(503, 'Google Maps is rate limiting us, try again shortly', { code: 'GOOGLE_QUOTA', details: { googleStatus: g.status ?? null } });
       }
       if (res.status === 403 || res.status === 401) {
         // Bad key, API not enabled, or a key restriction that excludes this server.
-        throw new HttpError(503, 'Google Maps is not authorised for this server', { code: 'GOOGLE_AUTH' });
+        throw new HttpError(503, 'Google Maps is not authorised for this server', { code: 'GOOGLE_AUTH', details: { googleStatus: g.status ?? null } });
       }
       if (res.status === 404) throw new HttpError(404, 'Place not found', { code: 'PLACE_NOT_FOUND' });
-      if (res.status === 400) throw new HttpError(502, 'Google rejected the request', { code: 'GOOGLE_BAD_REQUEST' });
-      throw new HttpError(502, 'Google Maps is unavailable', { code: 'GOOGLE_ERROR' });
+      if (res.status === 400) throw new HttpError(502, 'Google rejected the request', {
+        code: 'GOOGLE_BAD_REQUEST',
+        details: { googleStatus: g.status ?? null },
+      });
+      throw new HttpError(502, 'Google Maps is unavailable', { code: 'GOOGLE_ERROR', details: { googleStatus: g.status ?? null } });
     }
     return res.json();
   } catch (err) {

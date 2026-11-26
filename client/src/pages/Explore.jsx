@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, Compass, Route as RouteIcon, Search, Timer, Undo2, X } from 'lucide-react';
+import { useMutation, useQuery, useQueries } from '@tanstack/react-query';
+import { Compass, Route as RouteIcon, Search, Timer, Undo2, X } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useGeolocation } from '../hooks/useGeolocation.js';
@@ -24,6 +24,10 @@ import NavigationCard from '../components/explore/NavigationCard.jsx';
 import PlaceCard, { PlaceCardSkeleton } from '../components/explore/PlaceCard.jsx';
 import PlaceDetail from '../components/explore/PlaceDetail.jsx';
 import PlacePreview from '../components/explore/PlacePreview.jsx';
+import SortFilter from '../components/explore/SortFilter.jsx';
+import DraggableSheet from '../components/explore/DraggableSheet.jsx';
+import { DEFAULT_FILTERS, filterPlaces, mergePlaces, sortPlaces } from '../lib/placeFilters.js';
+import { shouldCommitOrigin } from '../lib/geo.js';
 
 // The Google Maps JS loader and clusterer stay out of the main bundle: they download
 // only when this page (or the tour map / admin pin manager) actually mounts a map.
@@ -62,6 +66,7 @@ const PROFILES = [
 
 const MATRIX_BATCH = 10; // Route Matrix elements are billed each; keep the batch small.
 const MAX_LIST = 60;
+const MAX_PINS = 80; // map markers for list results; clustering handles the rest
 
 const isNotConfigured = (err) => err?.code === 'GOOGLE_NOT_CONFIGURED';
 
@@ -94,7 +99,9 @@ export default function Explore() {
   const [detailPlace, setDetailPlace] = useState(null);
   const [bounds, setBounds] = useState(null);
   const [focus, setFocus] = useState(null);
-  const [sheetOpen, setSheetOpen] = useState(false); // mobile bottom sheet
+  const [sheetState, setSheetState] = useState('peek'); // mobile sheet: peek | half | full
+  const [sort, setSort] = useState('nearest');
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [optedIn, setOptedIn] = useState(false); // asked for external places at an approximate centre
   const [matrixWanted, setMatrixWanted] = useState(null);
 
@@ -142,14 +149,24 @@ export default function Explore() {
     staleTime: 5 * 60_000,
   });
 
-  const googleQuery = useQuery({
-    queryKey: ['explore', 'google', cLat, cLng, radius, groups.join(',')],
-    queryFn: ({ signal }) => api.placesNearby({ lat: cLat, lng: cLng, radius, groups }, signal),
-    enabled: googleEnabled,
-    staleTime: 5 * 60_000,
-    gcTime: 15 * 60_000,
-    retry: (count, err) => !isNotConfigured(err) && (err?.status ?? 500) >= 500 && count < 1,
+  // One query per category: a slow or failing category never blanks the others, each
+  // is cached on its own, and switching chips only fetches the groups not seen before.
+  const groupQueries = useQueries({
+    queries: groups.map((g) => ({
+      queryKey: ['explore', 'google', cLat, cLng, radius, g],
+      queryFn: ({ signal }) => api.placesNearby({ lat: cLat, lng: cLng, radius, groups: [g] }, signal),
+      enabled: googleEnabled,
+      staleTime: 5 * 60_000,
+      gcTime: 15 * 60_000,
+      retry: (count, err) => !isNotConfigured(err) && (err?.status ?? 500) >= 500 && count < 1,
+    })),
   });
+  const groupErrors = groupQueries
+    .map((q, i) => ({ group: groups[i], error: q.error, refetch: q.refetch }))
+    .filter((x) => x.error && !isNotConfigured(x.error));
+  const googleOffFromGroups = groupQueries.some((q) => isNotConfigured(q.error));
+  const googlePending = googleEnabled && groupQueries.length > 0 && groupQueries.every((q) => q.isPending);
+  const googleData = groupQueries.map((q) => q.data).filter(Boolean);
 
   // Viewport pins: waits for the pan to settle, and a one-pixel nudge is not a new key.
   const settled = useDebouncedValue(bounds, 500);
@@ -197,26 +214,31 @@ export default function Explore() {
     [pinsQuery.data]
   );
 
-  const googlePlaces = useMemo(
-    () => (googleEnabled ? (googleQuery.data?.items ?? []).map(googleToPlace) : []),
-    [googleEnabled, googleQuery.data]
-  );
+  const googlePlaces = useMemo(() => {
+    if (!googleEnabled) return [];
+    const seen = new Set();
+    return googleData
+      .flatMap((d) => d.items ?? [])
+      .filter((it) => (seen.has(it.id) ? false : (seen.add(it.id), true)))
+      .map(googleToPlace);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [googleEnabled, groupQueries.map((q) => q.dataUpdatedAt).join(',')]);
 
   const allowed = useCallback((p) => !curatedFilter || curatedFilter.has(p.category), [curatedFilter]);
 
-  // What the list shows: everything within the chosen radius, nearest first.
-  const listPlaces = useMemo(() => {
+  // What the list shows: radius + filters, then the chosen sort. The map uses this same
+  // array, so sorting and filtering can never disagree between list and map.
+  const { listPlaces, hiddenUnrated } = useMemo(() => {
     const curated = curatedNearby.filter(allowed);
-    return [...curated, ...googlePlaces]
-      .filter((p) => p.straightLineMeters != null)
-      .sort((a, b) => a.straightLineMeters - b.straightLineMeters);
-  }, [curatedNearby, googlePlaces, allowed]);
+    const withDistance = mergePlaces(curated, googlePlaces).filter((p) => p.straightLineMeters != null);
+    const f = filterPlaces(withDistance, { radiusMeters: radius, ...filters });
+    return { listPlaces: sortPlaces(f.places, sort), hiddenUnrated: f.hiddenUnrated };
+  }, [curatedNearby, googlePlaces, allowed, radius, filters, sort]);
 
-  // What the map shows: the list plus any curated pin in view (those carry no distance
-  // from PostGIS, so a straight line to the centre is worked out here).
+  // What the map shows: the (sorted, filtered, capped) list plus curated pins in view.
   const mapPlaces = useMemo(() => {
     const byId = new Map();
-    for (const p of listPlaces) byId.set(p.id, p);
+    for (const p of listPlaces.slice(0, MAX_PINS)) byId.set(p.id, p);
     for (const p of viewportCurated) {
       if (byId.has(p.id) || !allowed(p)) continue;
       byId.set(p.id, { ...p, straightLineMeters: straightMeters(center, p) });
@@ -261,29 +283,50 @@ export default function Explore() {
     retry: false,
   });
 
+  // Display / deep-link origin: the freshest precise fix, else the labelled fallback.
   const navOrigin = useMemo(
-    () => ({ lat: geo.coords.lat, lng: geo.coords.lng, approximate: !geo.isPrecise, label: geo.fallbackLabel }),
-    [geo.coords.lat, geo.coords.lng, geo.isPrecise, geo.fallbackLabel]
+    () => ({
+      lat: geo.coords.lat,
+      lng: geo.coords.lng,
+      accuracy: geo.accuracy,
+      approximate: !geo.isPrecise,
+      label: geo.fallbackLabel,
+    }),
+    [geo.coords.lat, geo.coords.lng, geo.accuracy, geo.isPrecise, geo.fallbackLabel]
   );
+
+  // Route origin: committed, not live. A route is recomputed only on start, mode change,
+  // first precise fix, or after moving > 150 m and >= 20 s — never per GPS tick.
+  const [committed, setCommitted] = useState(null);
+  useEffect(() => {
+    if (!navDest) {
+      setCommitted(null);
+      return;
+    }
+    if (geo.precise && shouldCommitOrigin(committed, geo.precise)) setCommitted(geo.precise);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navDest, geo.precise]);
+  const routeOrigin = committed ?? { lat: geo.coords.lat, lng: geo.coords.lng };
 
   const navRoute = useQuery({
     queryKey: [
       'explore',
       'route',
       navMode,
-      round(navOrigin.lat, 4),
-      round(navOrigin.lng, 4),
+      round(routeOrigin.lat, 4),
+      round(routeOrigin.lng, 4),
       navDest && round(navDest.lat, 5),
       navDest && round(navDest.lng, 5),
     ],
     queryFn: ({ signal }) =>
       api.googleRoute(
-        { from: { lat: navOrigin.lat, lng: navOrigin.lng }, to: { lat: navDest.lat, lng: navDest.lng }, mode: navMode },
+        { from: { lat: routeOrigin.lat, lng: routeOrigin.lng }, to: { lat: navDest.lat, lng: navDest.lng }, mode: navMode },
         signal
       ),
     enabled: Boolean(navDest),
     staleTime: 10 * 60_000,
     retry: false,
+    placeholderData: (prev) => prev,
   });
 
   // Real road distance + time per place id, for the current mode only.
@@ -323,7 +366,7 @@ export default function Explore() {
     (place) => {
       setSelected(place);
       setSearchOpen(false);
-      if (!isDesktop) setSheetOpen(false); // get the list out of the way of the map
+      if (!isDesktop) setSheetState('peek'); // get the list out of the way of the map
       moveCamera({ lat: place.lat, lng: place.lng, zoom: 15 });
     },
     [isDesktop, moveCamera]
@@ -365,7 +408,10 @@ export default function Explore() {
       if (place) {
         setSelected(place);
         setSearchOpen(false);
-        if (!isDesktop) setSheetOpen(false);
+        if (!isDesktop) setSheetState('peek');
+        requestAnimationFrame(() =>
+          document.querySelector(`[data-place-id="${CSS.escape(String(place.id))}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        );
       }
     },
     [placeIndex, isDesktop]
@@ -444,9 +490,8 @@ export default function Explore() {
 
   /* ------------------------------------------------------------------ status */
 
-  const loadingList = curatedQuery.isPending || (googleEnabled && googleQuery.isPending);
-  const googleOff = isNotConfigured(googleQuery.error) || isNotConfigured(searchQuery.error);
-  const googleFailed = googleQuery.isError && !googleOff;
+  const loadingList = curatedQuery.isPending || googlePending;
+  const googleOff = googleOffFromGroups || isNotConfigured(searchQuery.error);
   const curatedCount = listPlaces.filter((p) => p.source === 'tourmate').length;
   const aroundLabel = anchor ? anchor.name : geo.isPrecise ? 'you' : `${geo.fallbackLabel} (approximate)`;
   const modeWord = { walk: 'walking', bicycle: 'cycling', drive: 'driving' }[navMode] ?? 'travel';
@@ -537,15 +582,16 @@ export default function Explore() {
           Google Places isn&apos;t configured on this server, so only TourMate picks are shown.
         </p>
       )}
-      {googleFailed && (
-        <p className="notice-error" role="alert">
-          Couldn&apos;t load places from Google just now.{' '}
-          <button type="button" className="font-semibold underline" onClick={() => googleQuery.refetch()}>
+      {groupErrors.map(({ group, error, refetch }) => (
+        <p key={group} className="notice-error" role="alert">
+          Couldn&apos;t load {group.replace('_', ' ')} from Google
+          {error.code ? ` (${error.code}${error.details?.googleStatus ? `: ${error.details.googleStatus}` : ''})` : ''}.{' '}
+          <button type="button" className="font-semibold underline" onClick={() => refetch()}>
             Try again
           </button>
         </p>
-      )}
-      {googleQuery.data?.failedGroups?.length > 0 && (
+      ))}
+      {groupQueries.some((q) => q.data?.failedGroups?.length > 0) && (
         <p className="faint text-[11px]">Some categories couldn&apos;t be loaded; the rest are shown.</p>
       )}
       {curatedQuery.isError && (
@@ -556,6 +602,8 @@ export default function Explore() {
           </button>
         </p>
       )}
+
+      <SortFilter sort={sort} onSort={setSort} filters={filters} onFilters={setFilters} hiddenUnrated={hiddenUnrated} />
 
       {googleEnabled && !googleOff && matrixPlaces.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -592,10 +640,10 @@ export default function Explore() {
           ))}
       </ul>
 
-      {!loadingList && listPlaces.length === 0 && !curatedQuery.isError && (
+      {!loadingList && listPlaces.length === 0 && !curatedQuery.isError && groupErrors.length === 0 && (
         <div className="rounded-2xl bg-sand-100 p-4 text-center text-sm dark:bg-ink-800">
           <p className="font-semibold">Nothing within {radiusLabel(radius)}</p>
-          <p className="faint mt-1 text-xs">Try a wider radius or fewer category filters.</p>
+          <p className="faint mt-1 text-xs">Try a wider radius, fewer filters or another category.</p>
           {radius < RADII[RADII.length - 1] && (
             <button
               type="button"
@@ -615,19 +663,17 @@ export default function Explore() {
   /* ------------------------------------------------------------------ render */
 
   const floatingBottom = isDesktop ? 'bottom-3' : 'bottom-[8.25rem]';
-  const showFloating = isDesktop || !sheetOpen;
+  const showFloating = isDesktop || sheetState === 'peek';
 
   return (
     <div className="flex min-h-screen flex-col">
-      <div className="flex-1 space-y-4 p-3 md:p-8">
-        <header>
+      <div className="flex-1 space-y-3 p-2 md:space-y-4 md:p-6">
+        <header className="flex items-baseline justify-between gap-3">
           <h1 className="text-xl font-black">Explore</h1>
-          <p className="muted text-sm">
-            Famous sights, great food and local rides — around you, or around any place you pick.
-          </p>
+          <p className="muted hidden text-sm md:block">Famous sights, great food and local rides — around you, or any place you pick.</p>
         </header>
 
-        <div className="relative flex h-[calc(100dvh-19.5rem)] min-h-[30rem] overflow-hidden md:h-[calc(100dvh-13rem)] md:min-h-[34rem] rounded-3xl border border-sand-200 bg-white dark:border-ink-600 dark:bg-ink-900">
+        <div className="relative flex h-[calc(100dvh-11rem)] min-h-[32rem] overflow-hidden md:h-[calc(100dvh-8.5rem)] md:min-h-[36rem] rounded-3xl border border-sand-200 bg-white dark:border-ink-600 dark:bg-ink-900">
           {isDesktop && (
             <aside className="w-[26rem] shrink-0 overflow-y-auto border-r border-sand-200 dark:border-ink-600">{panel}</aside>
           )}
@@ -764,9 +810,13 @@ export default function Explore() {
                       onMode={setNavMode}
                       route={navRoute.data}
                       pending={navRoute.isFetching}
-                      error={navRoute.isError ? navRoute.error.message : null}
+                      error={navRoute.isError ? navRoute.error : null}
                       onReset={resetNavigation}
                       onUseLocation={goToMyLocation}
+                      tracking={geo.tracking}
+                      onToggleTracking={geo.tracking ? geo.stopTracking : geo.startTracking}
+                      locating={geo.state === 'locating'}
+                      denied={geo.permission === 'denied' || geo.state === 'denied'}
                     />
                   )}
                   {selected && selected.id !== navDest?.id && (
@@ -786,34 +836,12 @@ export default function Explore() {
 
             {/* Phone: the discovery panel is a bottom sheet over the map. */}
             {!isDesktop && (
-              <div
-                className={`absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-3xl border-t border-sand-200 bg-white shadow-2xl transition-[height] duration-300 dark:border-ink-600 dark:bg-ink-900 ${
-                  sheetOpen ? 'h-[72%]' : 'h-[7.5rem]'
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSheetOpen((v) => !v)}
-                  aria-expanded={sheetOpen}
-                  className="flex w-full shrink-0 flex-col items-center gap-1 px-4 pb-2 pt-2 text-left"
-                >
-                  <span className="h-1 w-10 rounded-full bg-sand-300 dark:bg-ink-600" aria-hidden />
-                  <span className="flex w-full items-center justify-between gap-2">
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-black">
-                        {anchor ? `Around ${anchor.name}` : geo.isPrecise ? 'Around you' : `Around ${geo.fallbackLabel}`}
-                      </span>
-                      <span className="faint block text-xs">
-                        {loadingList ? 'Looking around…' : `${listPlaces.length} places within ${radiusLabel(radius)}`}
-                      </span>
-                    </span>
-                    {sheetOpen ? <ChevronDown className="h-5 w-5 shrink-0" aria-hidden /> : <ChevronUp className="h-5 w-5 shrink-0" aria-hidden />}
-                    <span className="sr-only">{sheetOpen ? 'Collapse results' : 'Expand results'}</span>
-                  </span>
-                </button>
-                {sheetOpen ? (
-                  <div className="min-h-0 flex-1 overflow-y-auto">{panel}</div>
-                ) : (
+              <DraggableSheet
+                state={sheetState}
+                onState={setSheetState}
+                title={anchor ? `Around ${anchor.name}` : geo.isPrecise ? 'Around you' : `Around ${geo.fallbackLabel}`}
+                subtitle={loadingList ? 'Looking around…' : `${listPlaces.length} places within ${radiusLabel(radius)}`}
+                peekContent={
                   <div className="flex gap-1.5 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {CHIPS.slice(0, 3).map((c) => (
                       <ChipButton key={c.id} active={chips.includes(c.id)} color={c.color} onClick={() => toggleChip(c.id)}>
@@ -821,8 +849,10 @@ export default function Explore() {
                       </ChipButton>
                     ))}
                   </div>
-                )}
-              </div>
+                }
+              >
+                {panel}
+              </DraggableSheet>
             )}
           </div>
         </div>

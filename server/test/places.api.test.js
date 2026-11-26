@@ -66,9 +66,9 @@ test('nearbyPlaces: field mask + key in headers only, radius enforced, curated d
     if (url.endsWith(':searchNearby')) {
       return json({
         places: [
-          gPlace('P_FORT', 'Amber Fort', 26.9857, 75.8514, { rating: 4.6, userRatingCount: 9000 }),
-          gPlace('P_CAFE', 'Anokhi Cafe', 26.989, 75.852, { currentOpeningHours: { openNow: true } }),
-          gPlace('P_FAR', 'Far Away Cafe', 27.2, 75.85), // ~24 km: outside a 5 km radius
+          gPlace('P_FORT', 'Amber Fort', 26.9857, 75.8514, { rating: 4.6, userRatingCount: 9000, types: ['tourist_attraction'] }),
+          gPlace('P_CAFE', 'Anokhi Park', 26.989, 75.852, { types: ['tourist_attraction'], currentOpeningHours: { openNow: true } }),
+          gPlace('P_FAR', 'Far Away Fort', 27.2, 75.85, { types: ['tourist_attraction'] }), // ~24 km: outside a 5 km radius
         ],
       });
     }
@@ -98,7 +98,7 @@ test('nearbyPlaces: field mask + key in headers only, radius enforced, curated d
 });
 
 test('nearbyPlaces: street food goes through Text Search with a bias circle', async () => {
-  handler = () => json({ places: [gPlace('P_CHAAT', 'Rawat Kachori', 26.9, 75.8)] });
+  handler = () => json({ places: [gPlace('P_CHAAT', 'Rawat Kachori', 26.9, 75.8, { types: ['snack_bar'] })] });
   const out = await places.nearbyPlaces({
     lat: 26.9,
     lng: 75.8,
@@ -115,7 +115,7 @@ test('nearbyPlaces: one failing group does not blank the rest; total failure thr
   handler = (url, init) => {
     const body = JSON.parse(init.body);
     if (body.includedTypes?.includes('restaurant')) return json({ error: { status: 'INTERNAL' } }, 500);
-    return json({ places: [gPlace('P1', 'Hawa Mahal', 26.9239, 75.8267)] });
+    return json({ places: [gPlace('P1', 'Hawa Mahal', 26.9239, 75.8267, { types: ['tourist_attraction'] })] });
   };
   const out = await places.nearbyPlaces({
     lat: 26.9239,
@@ -280,4 +280,98 @@ test('existing OSRM route endpoint is untouched by the new router', async () => 
     body: JSON.stringify({ from: { lat: 999, lng: 0 }, to: { lat: 1, lng: 1 } }),
   });
   assert.equal(res.status, 422); // still validated by its original schema
+});
+
+/* ---------------------------------------------------------- category engine */
+
+const lastBodies = () => calls.map((c) => JSON.parse(c.init.body));
+
+test('temples: no Table B type is ever sent, and all place types come back', async () => {
+  const { TABLE_B_RESPONSE_ONLY } = await import('../src/services/places.logic.js');
+  handler = (url, init) => {
+    const body = JSON.parse(init.body);
+    // Behave like Google: a response-only type is a hard 400.
+    if (body.includedTypes?.some((t) => TABLE_B_RESPONSE_ONLY.includes(t))) {
+      return json({ error: { status: 'INVALID_ARGUMENT', message: 'Unsupported types' } }, 400);
+    }
+    if (body.includedTypes?.includes('hindu_temple')) {
+      return json({ places: [gPlace('T1', 'Birla Mandir', 26.89, 75.81, { primaryType: 'hindu_temple', types: ['hindu_temple', 'place_of_worship'] })] });
+    }
+    if (body.includedTypes?.includes('monument')) {
+      return json({ places: [gPlace('M1', 'Jantar Mantar', 26.92, 75.82, { primaryType: 'monument', types: ['monument', 'tourist_attraction'] })] });
+    }
+    if (body.textQuery === 'gurudwara') {
+      return json({ places: [gPlace('G1', 'Gurudwara Sahib', 26.9, 75.8, { types: ['place_of_worship'] })] });
+    }
+    return json({ places: [] });
+  };
+  const out = await places.nearbyPlaces({ lat: 26.9, lng: 75.8, radiusMeters: 20000, groups: ['temples'], loadCurated: async () => [] });
+  assert.deepEqual(out.failedGroups, []);
+  assert.deepEqual(out.items.map((p) => p.placeId).sort(), ['G1', 'M1', 'T1']);
+  assert.ok(out.items.every((p) => p.kind === 'temple'));
+  for (const b of lastBodies()) assert.ok(!b.includedTypes?.includes('place_of_worship'));
+});
+
+test('a rejected type list is retried once with the fallback list', async () => {
+  let n = 0;
+  handler = (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.includedTypes?.includes('tea_house')) { n += 1; return json({ error: { status: 'INVALID_ARGUMENT' } }, 400); }
+    return json({ places: [gPlace('C1', 'Blue Cafe', 26.9, 75.8, { primaryType: 'cafe', types: ['cafe'] })] });
+  };
+  const out = await places.nearbyPlaces({ lat: 26.9, lng: 75.8, radiusMeters: 5000, groups: ['cafes'], loadCurated: async () => [] });
+  assert.equal(n, 1);
+  assert.deepEqual(out.items.map((p) => p.placeId), ['C1']);
+});
+
+test('rides: only real rides pass; availability is never claimed', async () => {
+  handler = (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.textQuery === 'ropeway cable car') {
+      return json({ places: [
+        gPlace('R1', 'Mussoorie Ropeway', 26.9, 75.8, { types: ['tourist_attraction'] }),
+        gPlace('X1', 'Ropeway View Hotel', 26.9, 75.8, { primaryType: 'hotel', types: ['hotel'] }),
+        gPlace('X2', 'City Fort', 26.9, 75.8, { primaryType: 'tourist_attraction', types: ['tourist_attraction'] }),
+      ] });
+    }
+    if (body.includedTypes?.includes('amusement_park')) {
+      return json({ places: [gPlace('R2', 'Fun World', 26.9, 75.8, { primaryType: 'amusement_park', types: ['amusement_park'] })] });
+    }
+    return json({ places: [] });
+  };
+  const out = await places.nearbyPlaces({ lat: 26.9, lng: 75.8, radiusMeters: 20000, groups: ['rides'], loadCurated: async () => [] });
+  assert.deepEqual(out.items.map((p) => p.placeId).sort(), ['R1', 'R2']);
+  const r1 = out.items.find((p) => p.placeId === 'R1');
+  assert.equal(r1.rideType, 'Ropeway / cable car');
+  assert.equal(r1.availability, 'unverified');
+  assert.equal(r1.priceLevel, null);
+});
+
+test('popular_food keeps only well-reviewed restaurants; unknown ratings are excluded', async () => {
+  handler = () => json({ places: [
+    gPlace('A', 'Great', 26.9, 75.8, { types: ['restaurant'], rating: 4.5, userRatingCount: 800 }),
+    gPlace('B', 'Few reviews', 26.9, 75.8, { types: ['restaurant'], rating: 4.9, userRatingCount: 5 }),
+    gPlace('C', 'Meh', 26.9, 75.8, { types: ['restaurant'], rating: 3.2, userRatingCount: 900 }),
+    gPlace('D', 'Unrated', 26.9, 75.8, { types: ['restaurant'] }),
+  ] });
+  const out = await places.nearbyPlaces({ lat: 26.9, lng: 75.8, radiusMeters: 5000, groups: ['popular_food'], loadCurated: async () => [] });
+  assert.deepEqual(out.items.map((p) => p.placeId), ['A']);
+});
+
+test('street food drops hotels and unrelated places', async () => {
+  handler = () => json({ places: [
+    gPlace('S1', 'Chaat Corner', 26.9, 75.8, { types: ['snack_bar'] }),
+    gPlace('S2', 'Grand Hotel', 26.9, 75.8, { primaryType: 'hotel', types: ['hotel'] }),
+    gPlace('S3', 'Bank', 26.9, 75.8, { types: ['bank'] }),
+  ] });
+  const out = await places.nearbyPlaces({ lat: 26.9, lng: 75.8, radiusMeters: 5000, groups: ['street_food'], loadCurated: async () => [] });
+  assert.deepEqual(out.items.map((p) => p.placeId), ['S1']);
+});
+
+test('Google errors keep a stable code and a sanitised status', async () => {
+  handler = () => json({ error: { status: 'INVALID_ARGUMENT', message: 'bad' } }, 400);
+  await assert.rejects(
+    places.nearbyPlaces({ lat: 1, lng: 1, radiusMeters: 1000, groups: ['restaurants'], loadCurated: async () => [] }),
+    (err) => err.code === 'GOOGLE_BAD_REQUEST' && err.details?.googleStatus === 'INVALID_ARGUMENT'
+  );
 });

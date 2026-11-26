@@ -1,5 +1,5 @@
 import { Compass, Navigation, X } from 'lucide-react';
-import { CategoryDot, Distances, OpenNow, PlaceImage, Rating, SourceBadge } from './PlaceBits.jsx';
+import { CategoryDot, Distances, OpenNow, PlaceImage, PriceLevel, Rating, RideNote, SourceBadge } from './PlaceBits.jsx';
 
 /*
  * The card that opens when a marker or list row is selected. A React overlay rather
@@ -33,8 +33,10 @@ export default function PlacePreview({ place, travel, mode, onClose, onDetails, 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <Rating place={place} />
           <OpenNow place={place} />
+            <PriceLevel place={place} />
         </div>
         <Distances place={place} travel={travel} mode={mode} />
+        <RideNote place={place} />
 
         <div className="flex flex-wrap gap-2 pt-1">
           <button type="button" className="btn-primary min-h-10 flex-1 px-3 text-xs" onClick={() => onDetails(place)}>

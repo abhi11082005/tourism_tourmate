@@ -17,6 +17,13 @@ export const CATEGORY_STYLE = {
   // External (Google) discoveries get their own, deliberately different, look.
   restaurant: { label: 'Restaurant', color: '#c2255c', glyph: 'eat' },
   attraction: { label: 'Place', color: '#7048e8', glyph: 'pin' },
+  museum: { label: 'Museum', color: '#1971c2', glyph: 'museum' },
+  temple: { label: 'Temple', color: '#c2410c', glyph: 'temple' },
+  cafe: { label: 'Cafe', color: '#8b5e34', glyph: 'cup' },
+  street_food: { label: 'Street food', color: '#d97706', glyph: 'bowl' },
+  shopping: { label: 'Shopping', color: '#0891b2', glyph: 'bag' },
+  ride: { label: 'Ride', color: '#0ca678', glyph: 'ride' },
+  experience: { label: 'Experience', color: '#2f9e44', glyph: 'tree' },
 };
 const FALLBACK_STYLE = { label: 'Place', color: '#868e96', glyph: 'pin' };
 
@@ -29,6 +36,12 @@ const GLYPHS = {
   star: 'M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8L3.5 9.7l5.9-.8z',
   eat: 'M8 3v7M5.5 3v4.5a2.5 2.5 0 0 0 5 0V3M8 10.5V21M17 3c-2.2 1.2-3 3.6-3 6.2 0 2 1 3 3 3V21',
   ride: 'M12 12m-6 0a6 6 0 1 0 12 0a6 6 0 1 0-12 0M12 6v12M6 12h12M7.8 7.8l8.4 8.4M16.2 7.8l-8.4 8.4M8 21l4-9 4 9',
+  museum: 'M3 10l9-6 9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18',
+  temple: 'M12 3v3M8 21V12l4-4 4 4v9M4 21h16M10 21v-4h4v4',
+  cup: 'M5 8h11v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4zM16 9h1.5a2.5 2.5 0 0 1 0 5H16M8 3v2M12 3v2',
+  bowl: 'M3 12h18a8 8 0 0 1-8 8h-2a8 8 0 0 1-8-8zM8 8c0-1.5 1-1.5 1-3M13 8c0-1.5 1-1.5 1-3',
+  bag: 'M5 8h14l-1 12H6zM9 8V6a3 3 0 0 1 6 0v2',
+  tree: 'M12 21v-6M12 3l5 7h-3l4 6H6l4-6H7z',
   pin: 'M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11zM12 12.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
 };
 

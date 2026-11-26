@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Navigation } from 'lucide-react';
-import { CategoryDot, Distances, OpenNow, PlaceImage, Rating, SourceBadge } from './PlaceBits.jsx';
+import { CategoryDot, Distances, OpenNow, PlaceImage, PriceLevel, Rating, RideNote, SourceBadge } from './PlaceBits.jsx';
 
 /*
  * One discovery result. The main area is a single button (select + show on the map);
@@ -9,6 +9,7 @@ import { CategoryDot, Distances, OpenNow, PlaceImage, Rating, SourceBadge } from
 function PlaceCard({ place, travel, mode, selected, onSelect, onDetails, onDirections }) {
   return (
     <li
+      data-place-id={place.id}
       className={`overflow-hidden rounded-2xl border transition ${
         selected
           ? 'border-glow bg-glow/5 shadow-md'
@@ -33,9 +34,11 @@ function PlaceCard({ place, travel, mode, selected, onSelect, onDetails, onDirec
           <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
             <Rating place={place} />
             <OpenNow place={place} />
+            <PriceLevel place={place} />
           </span>
           {place.address && <span className="faint block truncate text-xs">{place.address}</span>}
           <Distances place={place} travel={travel} mode={mode} />
+          <RideNote place={place} />
         </span>
       </button>
 

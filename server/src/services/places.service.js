@@ -3,6 +3,7 @@ import { findNearby } from './attractions.service.js';
 import { HttpError } from '../utils/httpError.js';
 import {
   PLACE_GROUPS,
+  acceptsPlace,
   dedupePlaces,
   normalizePlace,
   parseDuration,
@@ -26,6 +27,8 @@ const SEARCH_MASK = [
   'places.userRatingCount',
   'places.primaryType',
   'places.primaryTypeDisplayName',
+  'places.types',
+  'places.priceLevel',
   'places.businessStatus',
   'places.currentOpeningHours.openNow',
   'places.photos.name',
@@ -40,7 +43,10 @@ const DETAILS_MASK = [
   'location',
   'rating',
   'userRatingCount',
+  'primaryType',
   'primaryTypeDisplayName',
+  'types',
+  'priceLevel',
   'businessStatus',
   'editorialSummary',
   'regularOpeningHours.weekdayDescriptions',
@@ -51,59 +57,89 @@ const DETAILS_MASK = [
   'photos.authorAttributions',
 ].join(',');
 
-const PER_GROUP = 12; // Nearby Search caps at 20; 12 keeps lists scannable and cheap.
+// Ask for 20 (Nearby Search's cap) so post-filtering still leaves a useful list, then keep 12.
+const FETCH_COUNT = 20;
+const PER_GROUP = 12;
 
 const round = (n, dp = 3) => Number(n.toFixed(dp));
 
 /* ---------------------------------------------------------------- nearby */
 
-async function searchGroup({ groupKey, center, radiusMeters, signal }) {
-  const group = PLACE_GROUPS[groupKey];
+async function runSearch({ search, center, radiusMeters, signal }) {
+  const circle = { center: { latitude: center.lat, longitude: center.lng }, radius: radiusMeters };
 
   // Cache on a ~110 m grid: two visitors a few steps apart share one Google call.
-  // Distances are recomputed from the caller's real position below.
-  const key = `nearby:${groupKey}:${round(center.lat)}:${round(center.lng)}:${radiusMeters}`;
+  const what = search.textQuery ? `t:${search.textQuery}` : `n:${search.types.join('+')}`;
+  const key = `nearby:${what}:${round(center.lat)}:${round(center.lng)}:${radiusMeters}`;
 
-  const raw = await cached(
+  return cached(
     key,
     async (innerSignal) => {
-      if (group.textQuery) {
+      if (search.textQuery) {
         const res = await googleFetch(`${PLACES_API}/places:searchText`, {
           fieldMask: SEARCH_MASK,
           signal: innerSignal,
           body: {
-            textQuery: group.textQuery,
-            maxResultCount: PER_GROUP,
-            // Text Search takes a bias circle; the real cut-off is applied below.
-            locationBias: {
-              circle: { center: { latitude: center.lat, longitude: center.lng }, radius: radiusMeters },
-            },
+            textQuery: search.textQuery,
+            maxResultCount: FETCH_COUNT,
+            // Text Search only biases; the real cut-off is applied after.
+            locationBias: { circle },
             rankPreference: 'RELEVANCE',
           },
         });
         return res.places ?? [];
       }
-      const res = await googleFetch(`${PLACES_API}/places:searchNearby`, {
-        fieldMask: SEARCH_MASK,
-        signal: innerSignal,
-        body: {
-          includedTypes: group.types,
-          maxResultCount: PER_GROUP,
-          rankPreference: 'POPULARITY',
-          locationRestriction: {
-            circle: { center: { latitude: center.lat, longitude: center.lng }, radius: radiusMeters },
+      const call = (types) =>
+        googleFetch(`${PLACES_API}/places:searchNearby`, {
+          fieldMask: SEARCH_MASK,
+          signal: innerSignal,
+          body: {
+            includedTypes: types,
+            maxResultCount: FETCH_COUNT,
+            rankPreference: 'POPULARITY',
+            locationRestriction: { circle },
           },
-        },
-      });
-      return res.places ?? [];
+        });
+      try {
+        return (await call(search.types)).places ?? [];
+      } catch (err) {
+        // A type list Google rejects must not take the whole category down: retry
+        // once with the conservative list. Other errors (auth, quota) propagate.
+        if (err?.code === 'GOOGLE_BAD_REQUEST' && search.fallbackTypes) {
+          return (await call(search.fallbackTypes)).places ?? [];
+        }
+        throw err;
+      }
     },
     { signal }
   );
+}
 
-  return raw
-    .map((p) => normalizePlace(p, groupKey, center))
-    // Text Search only *biases*, so enforce the radius the user picked.
-    .filter((p) => p && p.name && p.straightLineMeters <= radiusMeters && p.businessStatus !== 'CLOSED_PERMANENTLY');
+async function searchGroup({ groupKey, center, radiusMeters, signal }) {
+  const group = PLACE_GROUPS[groupKey];
+
+  const settled = await Promise.allSettled(
+    group.searches.map((search) => runSearch({ search, center, radiusMeters, signal }))
+  );
+  // A category only fails when every one of its searches failed.
+  if (settled.every((s) => s.status === 'rejected')) throw settled[0].reason;
+
+  const seen = new Set();
+  const out = [];
+  for (const s of settled) {
+    if (s.status !== 'fulfilled') continue;
+    for (const raw of s.value) {
+      if (!raw?.id || seen.has(raw.id)) continue;
+      seen.add(raw.id);
+      if (!acceptsPlace(raw, groupKey)) continue;
+      const p = normalizePlace(raw, groupKey, center);
+      if (p && p.name && p.straightLineMeters <= radiusMeters && p.businessStatus !== 'CLOSED_PERMANENTLY') {
+        out.push(p);
+      }
+    }
+  }
+  out.sort((a, b) => a.straightLineMeters - b.straightLineMeters);
+  return out.slice(0, PER_GROUP);
 }
 
 /**
@@ -170,13 +206,11 @@ export async function placeDetails({ placeId, signal }) {
     { signal }
   );
 
-  const base = normalizePlace(raw, 'attractions', null);
+  const base = normalizePlace(raw, null, null);
   if (!base) throw new HttpError(502, 'Google returned an unusable place', { code: 'GOOGLE_ERROR' });
 
   return {
     ...base,
-    group: null,
-    groupLabel: null,
     summary: raw.editorialSummary?.text ?? null,
     // Only present when Google actually has hours for the place.
     weekdayHours: raw.regularOpeningHours?.weekdayDescriptions ?? null,

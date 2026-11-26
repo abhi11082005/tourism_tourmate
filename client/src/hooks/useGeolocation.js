@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
-import { currentPosition, GeolocationRefused, permissionState } from '../lib/geolocate.js';
+import { currentPosition, GeolocationRefused } from '../lib/geolocate.js';
+import { shouldAcceptFix } from '../lib/geo.js';
 
 const JAIPUR = { lat: 26.9124, lng: 75.7873 };
 
@@ -126,6 +127,72 @@ export function useGeolocation({ auto = false } = {}) {
     setError(null);
   }, []);
 
+  /*
+   * Optional live mode. Only starts from an explicit tap, only while the page is
+   * visible (paused when the tab is hidden, resumed when it returns — no background
+   * tracking), and fixes are throttled by shouldAcceptFix so a chatty GPS does not
+   * re-render the page. Always cleaned up on unmount.
+   */
+  const [tracking, setTracking] = useState(false);
+  const watchId = useRef(null);
+  const lastAccepted = useRef(null);
+
+  const stopWatch = useCallback(() => {
+    if (watchId.current != null) navigator.geolocation?.clearWatch(watchId.current);
+    watchId.current = null;
+  }, []);
+
+  const startWatch = useCallback(() => {
+    if (watchId.current != null || !('geolocation' in navigator)) return;
+    watchId.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!mounted.current) return;
+        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy ?? null, at: Date.now() };
+        if (!shouldAcceptFix(lastAccepted.current, next)) return;
+        lastAccepted.current = next;
+        setPrecise(next);
+        setState('granted');
+      },
+      (err) => {
+        if (!mounted.current) return;
+        if (err.code === err.PERMISSION_DENIED) {
+          stopWatch();
+          setTracking(false);
+          setPermission('denied');
+          setState('denied');
+          setError('Location permission was declined');
+        }
+        // timeouts / unavailable: keep the last fix and keep watching
+      },
+      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 20_000 }
+    );
+  }, [stopWatch]);
+
+  const startTracking = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      setState('unsupported');
+      return;
+    }
+    lastAccepted.current = precise;
+    setTracking(true);
+  }, [precise]);
+
+  const stopTracking = useCallback(() => {
+    setTracking(false);
+    stopWatch();
+  }, [stopWatch]);
+
+  useEffect(() => {
+    if (!tracking) return undefined;
+    const onVisibility = () => (document.hidden ? stopWatch() : startWatch());
+    if (!document.hidden) startWatch();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stopWatch();
+    };
+  }, [tracking, startWatch, stopWatch]);
+
   const accuracy = precise?.accuracy ?? null;
 
   return {
@@ -140,6 +207,9 @@ export function useGeolocation({ auto = false } = {}) {
     permission,
     error,
     request,
+    tracking,
+    startTracking,
+    stopTracking,
     refresh: request,
     clear,
     fallback,
